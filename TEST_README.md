@@ -20,12 +20,6 @@ tests/
 
 ## Installation
 
-### Activate Python Environment
-
-```bash
-source ~/python_env/py311/bin/activate
-```
-
 ### Install test dependencies
 
 ```bash
@@ -186,8 +180,6 @@ def test_complete_workflow(sample_pickle_file, temp_dir):
 To run tests automatically (make sure py311 environment is activated):
 
 ```bash
-# Activate environment
-source ~/python_env/py311/bin/activate
 
 # Run tests and generate coverage
 pytest --cov=mpk_lammps_ver4 --cov-report=term-missing

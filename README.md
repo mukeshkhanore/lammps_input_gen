@@ -182,7 +182,7 @@ The project includes a comprehensive test suite with 62 tests.
 ### Run All Tests
 
 ```bash
-source ~/python_env/py311/bin/activate
+
 pytest -v
 ```
 
