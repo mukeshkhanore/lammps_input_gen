@@ -6,7 +6,8 @@ This script processes shell models for LAMMPS structure and setup file generatio
 Mass ratio is set to 98% for core and 2% for shell.
 
 Author: Mukesh Khanore
-Date: 23-Feb-2026
+Date: 23-Feb-2026 # implemented lammps_modified_mauro_temps_v2.in 
+LAMMPS MD Logic: Mónica Elisabet Graf and Mauro António Pereira Gonçalves
 Version: 4.1 - Consistency/naming improvements, test mocking, and code clean-up.
 """
 import sys
