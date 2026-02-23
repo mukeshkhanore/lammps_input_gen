@@ -136,6 +136,8 @@ Located in `conftest.py`:
 - **`sample_config`**: Sample configuration object
 - **`mock_gulp_file`**: Mock GS.gulp file
 
+> **Note**: External dependencies such as `pm__cell` and `pm__chemical_order` are mocked natively in `conftest.py` allowing tests to run freely without installing these specific packages beforehand.
+
 ## Test Coverage
 
 The test suite covers:
@@ -203,6 +205,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ### Module Name Issues
 
 Note: The module name in imports should match your file name:
+
 - File: `mpk_lammps_ver4.py`
 - Import as: `mpk_lammps_ver4` (underscore replaces hyphen)
 

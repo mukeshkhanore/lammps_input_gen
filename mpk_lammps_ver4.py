@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-Shell Model Processing for LAMMPS Structure and Setup File Generation from .pickle and GS.gulp file.
+Shell Model Processing for LAMMPS Structure and Setup File Generation
+
+This script processes shell models for LAMMPS structure and setup file generation.
+Mass ratio is set to 98% for core and 2% for shell.
+
 Author: Mukesh Khanore
-Date: 12-Feb-2026
-Version: 4.0 - Enhanced with robust error handling, logging, and validation
-LAMMPS MD logic credit:  Mónica Elisabet Graf and Mauro António Pereira Gonçalves
+Date: 23-Feb-2026
+Version: 4.1 - Consistency/naming improvements, test mocking, and code clean-up.
 """
 import sys
 import os
@@ -12,8 +15,8 @@ import logging
 import numpy as np
 import copy
 import pickle
-from typing import Dict, List, Tuple, Any, Optional
 import subprocess
+from typing import Dict, List, Tuple, Any, Optional
 from mendeleev import element
 from dataclasses import dataclass, field
 import pm__cell as pmc
@@ -36,11 +39,12 @@ DEFAULT_MODEL_FILE = "./potential.pickle"
 DEFAULT_OUTPUT_FILE = "structure"
 
 # LAMMPS simulation parameters
-EQUILIBRATION_TEMP_STEPS = 20000
-EQUILIBRATION_FINAL_STEPS = 30000
-PRODUCTION_STEPS = 50000
-TIMESTEP = 0.0002
-THERMO_FREQ = 500
+DEFAULT_EQUILIBRATION_TEMP_STEPS = 20000
+DEFAULT_EQUILIBRATION_FINAL_STEPS = 30000
+DEFAULT_PRODUCTION_STEPS = 50000
+DEFAULT_TIMESTEP = 0.0002
+DEFAULT_THERMO_FREQ = 500
+DEFAULT_TRAJ_NAME = "trajectory"
 DUMP_FREQ = 500
 EWALD_ACCURACY = 1.0e-6
 
@@ -120,6 +124,12 @@ class Config:
     t_array: List[float] = field(default_factory=lambda: [DEFAULT_TEMPERATURE])
     t_stat: float = DEFAULT_T_STAT
     p_stat: float = DEFAULT_P_STAT
+    thermo_freq: int = DEFAULT_THERMO_FREQ
+    timestep: float = DEFAULT_TIMESTEP
+    equilibration_temp_steps: int = DEFAULT_EQUILIBRATION_TEMP_STEPS
+    equilibration_final_steps: int = DEFAULT_EQUILIBRATION_FINAL_STEPS
+    production_steps: int = DEFAULT_PRODUCTION_STEPS
+    traj_name: str = DEFAULT_TRAJ_NAME
     
     def validate(self) -> None:
         """
@@ -171,17 +181,51 @@ class Config:
                 f"Barostat damping time must be positive, got {self.p_stat}"
             )
         
-        logger.info("Configuration validation passed")
+        # Validate THERMO_FREQ
+        if self.thermo_freq <= 0:
+            raise ConfigurationError(
+                f"Thermo frequency must be positive, got {self.thermo_freq}"
+            )
+        
+        # Validate TIMESTEP
+        if self.timestep <= 0:
+            raise ConfigurationError(
+                f"Timestep must be positive, got {self.timestep}"
+            )
+        
+        # Validate EQUILIBRATION_TEMP_STEPS
+        if self.equilibration_temp_steps <= 0:
+            raise ConfigurationError(
+                f"Equilibration temperature steps must be positive, got {self.equilibration_temp_steps}"
+            )
+        
+        # Validate EQUILIBRATION_FINAL_STEPS
+        if self.equilibration_final_steps <= 0:
+            raise ConfigurationError(
+                f"Equilibration final steps must be positive, got {self.equilibration_final_steps}"
+            )
+        
+        # Validate PRODUCTION_STEPS
+        if self.production_steps <= 0:
+            raise ConfigurationError(
+                f"Production steps must be positive, got {self.production_steps}"
+            )
+        
+        # Validate trajectory name
+        if not self.traj_name:
+            raise ConfigurationError("Trajectory name cannot be empty")
+        
+        logger.info("✓ Configuration validation passed")
 
 # ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
-def get_mixing_type(mixtype: str, i: int, j: int, k: int) -> int:
+def get_mixing_type(mixing_type: str, i: int, j: int, k: int) -> int:
     """
     Determine mixing type based on coordinates.
     
     Args:
-        mixtype: Type of mixing ("homog", "G", or "14")
+        mixing_type: Type of mixing ("homog", "G", or "14")
         i, j, k: Integer coordinates
         
     Returns:
@@ -190,14 +234,14 @@ def get_mixing_type(mixtype: str, i: int, j: int, k: int) -> int:
     Raises:
         ValidationError: If mixing type is not supported
     """
-    if mixtype == "homog":
+    if mixing_type == "homog":
         return 0
-    elif mixtype == "G":
+    elif mixing_type == "G":
         return 0 if pow(-1, i + j + k) == -1 else 1
-    elif mixtype == "14":
+    elif mixing_type == "14":
         return 0 if (i % 2 == 0 and j % 2 == 0 and k % 2 == 0) else 1
     else:
-        raise ValidationError(f"Ordering '{mixtype}' not defined. Valid options: homog, G, 14")
+        raise ValidationError(f"Ordering '{mixing_type}' not defined. Valid options: homog, G, 14")
 
 # ============================================================================
 # SHELL MODEL DATA EXTRACTION
@@ -278,8 +322,8 @@ def extract_shell_model_data(model: Any) -> Tuple[Dict, Dict, List]:
                 }
                 shell_models_potentials.append(potential_entry)
         
-        logger.info(f"Extracted shell model data for {len(shell_models_data['model'])} species")
-        logger.debug(f"Springs: {len(shell_models_springs)}, Potentials: {len(shell_models_potentials)}")
+        logger.info(f"✓ Extracted shell model data for {len(shell_models_data['model'])} species")
+        logger.debug(f"  Springs: {len(shell_models_springs)}, Potentials: {len(shell_models_potentials)}")
         
         return shell_models_data, shell_models_springs, shell_models_potentials
         
@@ -323,10 +367,10 @@ def create_species_id_map(cell: Any, model: Any) -> Dict:
         # Create ID mapping
         for i, species in enumerate(species_list):
             species_id_map[(species, 'core')] = (i + 1)
-            species_id_map[(species, 'shell')] = (len(cell.species_name) + i + 1)
+            species_id_map[(species, 'shell')] = (len(species_list) + i + 1)
         
-        logger.info(f"Created species ID mapping for {len(species_list)} species")
-        logger.debug(f"Species ID map: {species_id_map}")
+        logger.info(f"✓ Created species ID mapping for {len(species_list)} species")
+        logger.debug(f"  Species ID map: {species_id_map}")
         
         return species_id_map
         
@@ -363,7 +407,7 @@ def create_mapped_cell(original_cell: Any, species_id_map: Dict) -> Any:
             coreshell=atom.coreshell
         )
     
-    logger.info(f"Created mapped cell with {new_cell.N} atoms")
+    logger.info(f"✓ Created mapped cell with {new_cell.N} atoms")
     return new_cell
 
 def initialize_shell_models_data(cell: Any) -> Dict:
@@ -429,7 +473,7 @@ def map_charges_to_new_model(shell_models_data: Dict, species_id_map: Dict,
                 
                 shell_models_data_new['model'][mapped_id][part]['mass'] = mass
     
-    logger.info("Successfully mapped charges and masses to new model")
+    logger.info("✓ Successfully mapped charges and masses to new model")
     return shell_models_data_new
 
 def validate_shell_model_data(shell_models_data: Dict) -> Dict:
@@ -496,7 +540,7 @@ def create_supercell(model: Any, supercell_dims: List[int], symmetry: str = "cub
         FileNotFoundError: If symmetry is "file" and GS.gulp is not found
         ValidationError: If model data is incomplete
     """
-    Nx, Ny, Nz = supercell_dims
+    nx, ny, nz = supercell_dims
     
     if symmetry == "file":
         logger.info("Reading GS.gulp file from working directory")
@@ -511,9 +555,9 @@ def create_supercell(model: Any, supercell_dims: List[int], symmetry: str = "cub
         try:
             cell = pmc.Cell(gulp_file)
             cell.is_shell_model = True
-            cell = cell.replicate([Nx // 2, Ny // 2, Nz // 2])
+            cell = cell.replicate([nx // 2, ny // 2, nz // 2])
             cell.pairCoresShells()
-            logger.info(f"Successfully created supercell from {gulp_file}")
+            logger.info(f"✓ Successfully created supercell from {gulp_file}")
             return cell
             
         except Exception as e:
@@ -536,17 +580,17 @@ def create_supercell(model: Any, supercell_dims: List[int], symmetry: str = "cub
         # Prepare structure
         cell = pmc.Cell(convention='zerolist', prescribe_N=0)
         cell.is_shell_model = True
-        cell.simplePerovskite(ABO_names=["A", "B", "O"], dimensions=[Nx, Ny, Nz], coreshell=True)
+        cell.simplePerovskite(ABO_names=["A", "B", "O"], dimensions=[nx, ny, nz], coreshell=True)
         
         # Apply chemical order
         try:
             cell = chemical_order_A.prescribeChemicalOrderForBox(
                 cell, position="A", replacements=model.AB_specie["A"], 
-                dimensions=[Nx, Ny, Nz], coreshell=True
+                dimensions=[nx, ny, nz], coreshell=True
             )
             cell = chemical_order_B.prescribeChemicalOrderForBox(
                 cell, position="B", replacements=model.AB_specie["B"], 
-                dimensions=[Nx, Ny, Nz], coreshell=True
+                dimensions=[nx, ny, nz], coreshell=True
             )
             cell.pairCoresShells()
         except Exception as e:
@@ -570,8 +614,8 @@ def create_supercell(model: Any, supercell_dims: List[int], symmetry: str = "cub
         cell.pairCoresShells()
         cell.displaceCartesian(perturbation)
         
-        logger.info(f"Created {symmetry} supercell with dimensions {supercell_dims}")
-        logger.info(f"Total atoms in supercell: {cell.N}")
+        logger.info(f"✓ Created {symmetry} supercell with dimensions {supercell_dims}")
+        logger.info(f"  Total atoms in supercell: {cell.N}")
         
         return cell
 
@@ -623,7 +667,7 @@ def process_shell_model(model: Any, cell: Any, output_filename: str = "structure
         # Write the structure
         try:
             string_cell.writeToLAMMPSStructure(output_filename)
-            logger.info(f"Successfully wrote LAMMPS structure to {output_filename}")
+            logger.info(f"✓ Successfully wrote LAMMPS structure to {output_filename}")
         except Exception as e:
             raise LAMMPSProcessingError(f"Error writing LAMMPS structure: {e}")
         
@@ -664,7 +708,7 @@ def load_model(file_path: str) -> Any:
         if not hasattr(model, 'charges'):
             raise ModelLoadError("Loaded model is missing required 'charges' attribute")
         
-        logger.info("Model loaded successfully")
+        logger.info("✓ Model loaded successfully")
         return model
         
     except pickle.UnpicklingError as e:
@@ -722,7 +766,7 @@ def generate_group_definitions(species_id_map: Dict) -> str:
     """Generate group definitions for cores and shells."""
     core_types = [id_val for (species, part), id_val in species_id_map.items() if part == 'core']
     shell_types = [id_val for (species, part), id_val in species_id_map.items() if part == 'shell']
-    species_types = list(species for (species, part), _ in species_id_map.items() if part == 'core')
+    species_types = list(dict.fromkeys([species for (species, part), _ in species_id_map.items() if part == 'core']))
     
     core_types_str = ' '.join(str(t) for t in sorted(core_types))
     shell_types_str = ' '.join(str(t) for t in sorted(shell_types))
@@ -788,13 +832,16 @@ def generate_bond_section(shell_models_springs: Dict, species_id_map: Dict) -> s
     
     return "\n".join(lines)
 
-def generate_simulation_settings(t_0: float, t_stat: float, p_stat: float) -> str:
+def generate_simulation_settings(initial_temp: float, t_stat: float, p_stat: float, 
+                                  thermo_freq: int, timestep: float,
+                                  equilibration_temp_steps: int,
+                                  equilibration_final_steps: int,
+                                  production_steps: int, traj_name: str) -> str:
     """Generate simulation settings and initial run."""
     return f"""
-#neigh_modify delay 10 check yes \t# ???
 neigh_modify page 100000 one 10000\t\t\t\t#max neighbors of one atom set to 10000
 
-## ---------- Define Settings --------------------- all as per Tonda recommendation
+## ---------- Define Settings ---------------------
 compute eng all pe/atom                                         #pe/atom: potential energy for each atom
 compute eatoms all reduce sum c_eng                             #sum up all energies
 
@@ -802,7 +849,7 @@ compute eatoms all reduce sum c_eng                             #sum up all ener
 
 reset_timestep 0
 
-thermo {THERMO_FREQ}
+thermo {thermo_freq}
 thermo_style custom step temp pe ke etotal enthalpy evdwl ecoul epair ebond elong etail  cella cellb cellc vol press pxx pyy pzz pxy pxz pyz
 
 #thermo_modify source yes
@@ -817,74 +864,80 @@ thermo_modify format 11 %20.15g
 thermo_modify format 12 %20.8g
 thermo_modify format 13 %20.8g
 
-
-#compute CStemp all temp/cs cores shells \t\t# compute temperature on centers of gravity of core/shell pairs and call it CStemp
-
 compute CSequ all temp/cs cores shells
-#compute thermo_press_lmp all pressure thermo_temp \t# press for correct kinetic scalar
 
-
-#thermo_modify temp CStemp press thermo_press_lmp \t# output temp and press calculated in the CStemp and thermo-press_lmp way (COM = centre-of-mass)
 thermo_modify temp CSequ
 
-timestep {TIMESTEP}
+timestep {timestep}
 
 #generate velocities
-velocity all create {t_0}K 34 dist gaussian mom yes rot no bias yes temp CSequ
+velocity all create {initial_temp}K 34 dist gaussian mom yes rot no bias yes temp CSequ
 
-# ----------------------- Equilibration {t_0}K  ---------------------------------------------
+# ----------------------- Equilibration {initial_temp}K  ---------------------------------------------
 
-fix npt_equ all npt temp {t_0} {t_0} {t_stat} tri 0.0 0.0 {p_stat}
+fix npt_equ all npt temp {initial_temp} {initial_temp} {t_stat} tri 0.0 0.0 {p_stat}
 fix_modify npt_equ temp CSequ
-# ----------------------- Production {t_0}K ---------------------------------------------
+run {equilibration_temp_steps}
+unfix npt_equ
 
-fix npt all npt temp {t_0} {t_0} {t_stat} tri 0.0 0.0 {p_stat}
+fix npt_equ all npt temp {initial_temp} {initial_temp} {t_stat} tri 0.0 0.0 {p_stat}
+fix_modify npt_equ temp CSequ
+run {equilibration_final_steps}
+unfix npt_equ
+
+# ----------------------- Production {initial_temp}K ---------------------------------------------
+
+fix npt all npt temp {initial_temp} {initial_temp} {t_stat} tri 0.0 0.0 {p_stat}
 fix_modify npt temp CSequ
 
-dump myDump all custom {DUMP_FREQ} trajectory_"$t_0"k.atom id type q x y z #fx fy fz
+dump myDump all custom {DUMP_FREQ} {traj_name}_${{int(initial_temp)}}k.atom id type q x y z #fx fy fz
 dump_modify myDump format 4 %20.6g
 dump_modify myDump format 5 %20.6g
 dump_modify myDump format 6 %20.6g
 
-run {PRODUCTION_STEPS}
+run {production_steps}
 unfix npt
 undump myDump
 """
 
-def generate_temperature_ramps(t_array: List[float], t_stat: float, p_stat: float) -> str:
+def generate_temperature_ramps(t_array: List[float], t_stat: float, p_stat: float,
+                                thermo_freq: int, timestep: float,
+                                equilibration_temp_steps: int,
+                                equilibration_final_steps: int,
+                                production_steps: int, traj_name: str) -> str:
     """Generate temperature ramp sections for multi-temperature runs."""
     if len(t_array) <= 1:
         return ""
     
     lines = []
     for i, t in enumerate(t_array[1:]):
-        t_00 = t_array[i]  # Previous temperature
-        t_1 = t  # Current temperature
+        prev_temp = t_array[i]  # Previous temperature
+        curr_temp = t  # Current temperature
         
         lines.append(f"""
-# ----------------------- Equilibration {t_1}K  ---------------------------------------------
+# ----------------------- Equilibration {curr_temp}K  ---------------------------------------------
 
-fix npt_equ all npt temp {t_00} {t_1} {t_stat} tri 0.0 0.0 {p_stat}
+fix npt_equ all npt temp {prev_temp} {curr_temp} {t_stat} tri 0.0 0.0 {p_stat}
 fix_modify npt_equ temp CSequ
-run {EQUILIBRATION_TEMP_STEPS}
+run {equilibration_temp_steps}
 unfix npt_equ 
 
-fix npt_equ all npt temp {t_1} {t_1} {t_stat} tri 0.0 0.0 {p_stat}
+fix npt_equ all npt temp {curr_temp} {curr_temp} {t_stat} tri 0.0 0.0 {p_stat}
 fix_modify npt_equ temp CSequ
-run {EQUILIBRATION_FINAL_STEPS}
+run {equilibration_final_steps}
 unfix npt_equ 
 
-# ----------------------- Production {t_1}K ---------------------------------------------
+# ----------------------- Production {curr_temp}K ---------------------------------------------
 #
-fix npt all npt temp {t_1} {t_1} {t_stat} tri 0.0 0.0 {p_stat}
+fix npt all npt temp {curr_temp} {curr_temp} {t_stat} tri 0.0 0.0 {p_stat}
 fix_modify npt temp CSequ
 
-dump myDump all custom {DUMP_FREQ} trajectory_{int(t_1)}k.atom id type q x y z #fx fy fz
+dump myDump all custom {DUMP_FREQ} {traj_name}_${{int(curr_temp)}}k.atom id type q x y z #fx fy fz
 dump_modify myDump format 4 %20.6g
 dump_modify myDump format 5 %20.6g
 dump_modify myDump format 6 %20.6g
 
-run {PRODUCTION_STEPS}
+run {production_steps}
 unfix npt
 undump myDump
 """)
@@ -894,7 +947,10 @@ undump myDump
 def generate_lammps_input(shell_models_data: Dict, shell_models_springs: Dict, 
                            shell_models_potentials: List, species_id_map: Dict, 
                            model_name: str, t_array: List[float], t_stat: float, 
-                           p_stat: float) -> str:
+                           p_stat: float, thermo_freq: int, timestep: float,
+                           equilibration_temp_steps: int,
+                           equilibration_final_steps: int,
+                           production_steps: int, traj_name: str) -> str:
     """
     Generate complete LAMMPS input file content.
     
@@ -907,12 +963,18 @@ def generate_lammps_input(shell_models_data: Dict, shell_models_springs: Dict,
         t_array: Array of temperatures for simulation
         t_stat: Thermostat damping time
         p_stat: Barostat damping time
+        thermo_freq: Thermo output frequency
+        timestep: MD timestep in fs
+        equilibration_temp_steps: Number of temperature equilibration steps
+        equilibration_final_steps: Number of final equilibration steps
+        production_steps: Number of production steps
+        traj_name: Trajectory filename prefix
         
     Returns:
         str: Complete LAMMPS input file content
     """
     try:
-        t_0 = t_array[0]
+        initial_temp = t_array[0]
         
         # Build the input file in sections
         sections = [
@@ -922,12 +984,16 @@ def generate_lammps_input(shell_models_data: Dict, shell_models_springs: Dict,
             generate_group_definitions(species_id_map),
             generate_potential_section(model_name, shell_models_potentials, species_id_map),
             generate_bond_section(shell_models_springs, species_id_map),
-            generate_simulation_settings(t_0, t_stat, p_stat),
-            generate_temperature_ramps(t_array, t_stat, p_stat)
+            generate_simulation_settings(initial_temp, t_stat, p_stat, thermo_freq, timestep,
+                                        equilibration_temp_steps, equilibration_final_steps,
+                                        production_steps, traj_name),
+            generate_temperature_ramps(t_array, t_stat, p_stat, thermo_freq, timestep,
+                                      equilibration_temp_steps, equilibration_final_steps,
+                                      production_steps, traj_name)
         ]
         
         content = "".join(sections)
-        logger.info("Generated LAMMPS input file content")
+        logger.info("✓ Generated LAMMPS input file content")
         return content
         
     except Exception as e:
@@ -946,9 +1012,13 @@ def save_lammps_input(content: str, filename: str = "lammps.in") -> None:
         LAMMPSProcessingError: If file writing fails
     """
     try:
+        # Check if file already exists
+        if os.path.exists(filename):
+            logger.warning(f"⚠️  File '{filename}' already exists - OVERWRITING")
+        
         with open(filename, "w", encoding="utf-8") as f:
             f.write(content)
-        logger.info(f"Successfully wrote LAMMPS input to {filename}")
+        logger.info(f"✓ Successfully wrote LAMMPS input to {filename}")
     except IOError as e:
         raise LAMMPSProcessingError(f"Error writing to {filename}: {e}")
 
@@ -962,9 +1032,9 @@ def get_user_config() -> Config:
     Returns:
         Config: Configuration object with validated parameters
     """
-    logger.info("=" * 60)
-    logger.info("Shell Model Processing for LAMMPS - Configuration")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
+    logger.info("🔧 Shell Model Processing for LAMMPS - Configuration")
+    logger.info("=" * 70)
     
     # Model file
     model_file = input(f"\nEnter path to model pickle file\n[default: {DEFAULT_MODEL_FILE}]: ").strip()
@@ -980,14 +1050,14 @@ def get_user_config() -> Config:
             else:
                 supercell_dims = [int(x) for x in dims_input.split()]
                 if len(supercell_dims) != 3:
-                    logger.error("Error: Please enter exactly 3 dimensions")
+                    logger.error("❌ Error: Please enter exactly 3 dimensions")
                     continue
                 if any(dim <= 0 for dim in supercell_dims):
-                    logger.error("Error: All dimensions must be positive")
+                    logger.error("❌ Error: All dimensions must be positive")
                     continue
             break
         except ValueError:
-            logger.error("Error: Please enter integers only")
+            logger.error("❌ Error: Please enter integers only")
     
     # Symmetry
     symmetry = input(f"\nEnter symmetry type (cubic/random/file) [default: {DEFAULT_SYMMETRY}]: ").strip().lower()
@@ -1003,33 +1073,93 @@ def get_user_config() -> Config:
             else:
                 t_array = [float(x) for x in t_array_input.split()]
                 if any(t < 0 for t in t_array):
-                    logger.error("Error: Temperatures must be non-negative")
+                    logger.error("❌ Error: Temperatures must be non-negative")
                     continue
             break
         except ValueError:
-            logger.error("Error: Please enter valid numbers only")
+            logger.error("❌ Error: Please enter valid numbers only")
     
     # Thermostat damping
     while True:
         try:
             t_stat = float(input(f"\nEnter thermostat damping time (t_stat) in fs [default: {DEFAULT_T_STAT}]: ").strip() or str(DEFAULT_T_STAT))
             if t_stat <= 0:
-                logger.error("Error: Thermostat damping must be positive")
+                logger.error("❌ Error: Thermostat damping must be positive")
                 continue
             break
         except ValueError:
-            logger.error("Error: Please enter a valid number")
+            logger.error("❌ Error: Please enter a valid number")
     
     # Barostat damping
     while True:
         try:
             p_stat = float(input(f"\nEnter barostat damping time (p_stat) in fs [default: {DEFAULT_P_STAT}]: ").strip() or str(DEFAULT_P_STAT))
             if p_stat <= 0:
-                logger.error("Error: Barostat damping must be positive")
+                logger.error("❌ Error: Barostat damping must be positive")
                 continue
             break
         except ValueError:
-            logger.error("Error: Please enter a valid number")
+            logger.error("❌ Error: Please enter a valid number")
+    
+    # THERMO_FREQ
+    while True:
+        try:
+            thermo_freq = int(input(f"\nEnter thermo frequency (THERMO_FREQ) [default: {DEFAULT_THERMO_FREQ}]: ").strip() or str(DEFAULT_THERMO_FREQ))
+            if thermo_freq <= 0:
+                logger.error("❌ Error: Thermo frequency must be positive")
+                continue
+            break
+        except ValueError:
+            logger.error("❌ Error: Please enter a valid integer")
+    
+    # TIMESTEP
+    while True:
+        try:
+            timestep = float(input(f"\nEnter timestep in fs [default: {DEFAULT_TIMESTEP}]: ").strip() or str(DEFAULT_TIMESTEP))
+            if timestep <= 0:
+                logger.error("❌ Error: Timestep must be positive")
+                continue
+            break
+        except ValueError:
+            logger.error("❌ Error: Please enter a valid number")
+    
+    # EQUILIBRATION_TEMP_STEPS
+    while True:
+        try:
+            equilibration_temp_steps = int(input(f"\nEnter equilibration temperature steps [default: {DEFAULT_EQUILIBRATION_TEMP_STEPS}]: ").strip() or str(DEFAULT_EQUILIBRATION_TEMP_STEPS))
+            if equilibration_temp_steps <= 0:
+                logger.error("❌ Error: Equilibration temperature steps must be positive")
+                continue
+            break
+        except ValueError:
+            logger.error("❌ Error: Please enter a valid integer")
+    
+    # EQUILIBRATION_FINAL_STEPS
+    while True:
+        try:
+            equilibration_final_steps = int(input(f"\nEnter equilibration final steps [default: {DEFAULT_EQUILIBRATION_FINAL_STEPS}]: ").strip() or str(DEFAULT_EQUILIBRATION_FINAL_STEPS))
+            if equilibration_final_steps <= 0:
+                logger.error("❌ Error: Equilibration final steps must be positive")
+                continue
+            break
+        except ValueError:
+            logger.error("❌ Error: Please enter a valid integer")
+    
+    # PRODUCTION_STEPS
+    while True:
+        try:
+            production_steps = int(input(f"\nEnter production steps [default: {DEFAULT_PRODUCTION_STEPS}]: ").strip() or str(DEFAULT_PRODUCTION_STEPS))
+            if production_steps <= 0:
+                logger.error("❌ Error: Production steps must be positive")
+                continue
+            break
+        except ValueError:
+            logger.error("❌ Error: Please enter a valid integer")
+    
+    # Trajectory name
+    traj_name = input(f"\nEnter trajectory filename prefix [default: {DEFAULT_TRAJ_NAME}]: ").strip()
+    if not traj_name:
+        traj_name = DEFAULT_TRAJ_NAME
     
     output_filename = DEFAULT_OUTPUT_FILE
     
@@ -1040,20 +1170,32 @@ def get_user_config() -> Config:
         output_filename=output_filename,
         t_array=t_array,
         t_stat=t_stat,
-        p_stat=p_stat
+        p_stat=p_stat,
+        thermo_freq=thermo_freq,
+        timestep=timestep,
+        equilibration_temp_steps=equilibration_temp_steps,
+        equilibration_final_steps=equilibration_final_steps,
+        production_steps=production_steps,
+        traj_name=traj_name
     )
     
     # Display configuration summary
     logger.info("\n" + "=" * 70)
     logger.info("⚙️  CONFIGURATION SUMMARY")
     logger.info("=" * 70)
-    logger.info(f"  Model file       : {config.model_file}")
-    logger.info(f"  Supercell dims   : {config.supercell_dims}")
-    logger.info(f"  Symmetry         : {config.symmetry}")
-    logger.info(f"  Output filename  : {config.output_filename}")
-    logger.info(f"  Temperatures [K] : {config.t_array}")
-    logger.info(f"  T-stat damping   : {config.t_stat}")
-    logger.info(f"  P-stat damping   : {config.p_stat}")
+    logger.info(f"  Model file                 : {config.model_file}")
+    logger.info(f"  Supercell dims             : {config.supercell_dims}")
+    logger.info(f"  Symmetry                   : {config.symmetry}")
+    logger.info(f"  Output filename            : {config.output_filename}")
+    logger.info(f"  Temperatures [K]           : {config.t_array}")
+    logger.info(f"  T-stat damping             : {config.t_stat} fs")
+    logger.info(f"  P-stat damping             : {config.p_stat} fs")
+    logger.info(f"  THERMO_FREQ                : {config.thermo_freq}")
+    logger.info(f"  TIMESTEP [fs]              : {config.timestep}")
+    logger.info(f"  EQUILIBRATION_TEMP_STEPS   : {config.equilibration_temp_steps}")
+    logger.info(f"  EQUILIBRATION_FINAL_STEPS  : {config.equilibration_final_steps}")
+    logger.info(f"  PRODUCTION_STEPS           : {config.production_steps}")
+    logger.info(f"  Trajectory name            : {config.traj_name}")
     logger.info("=" * 70 + "\n")
     
     return config
@@ -1085,7 +1227,7 @@ def main() -> None:
             config.supercell_dims,
             config.symmetry
         )
-        logger.info(f"Created supercell with dimensions {config.supercell_dims}")
+        logger.info(f"✓ Created supercell with dimensions {config.supercell_dims}")
         
         # Process shell model and generate LAMMPS structure
         mapped_cell, string_cell = process_shell_model(
@@ -1124,7 +1266,7 @@ def main() -> None:
             with open(map_filename, "w") as f:
                 for (species, part), id_value in species_id_map.items():
                     f.write(f"{species} {part} {id_value}\n")
-            logger.info(f"Species ID map saved to {map_filename}")
+            logger.info(f"✓ Species ID map saved to {map_filename}")
         except IOError as e:
             logger.error(f"Failed to save species ID map: {e}")
         
@@ -1138,7 +1280,13 @@ def main() -> None:
             model_name,
             config.t_array,
             config.t_stat,
-            config.p_stat
+            config.p_stat,
+            config.thermo_freq,
+            config.timestep,
+            config.equilibration_temp_steps,
+            config.equilibration_final_steps,
+            config.production_steps,
+            config.traj_name
         )
         
         # Save to file
@@ -1155,22 +1303,22 @@ def main() -> None:
         logger.info("\n" + "=" * 70 + "\n")
         
     except ConfigurationError as e:
-        logger.error(f"Configuration error: {e}")
+        logger.error(f"❌ Configuration error: {e}")
         sys.exit(1)
     except ModelLoadError as e:
-        logger.error(f"Model loading error: {e}")
+        logger.error(f"❌ Model loading error: {e}")
         sys.exit(1)
     except ValidationError as e:
-        logger.error(f"Validation error: {e}")
+        logger.error(f"❌ Validation error: {e}")
         sys.exit(1)
     except LAMMPSProcessingError as e:
-        logger.error(f"Processing error: {e}")
+        logger.error(f"❌ Processing error: {e}")
         sys.exit(1)
     except KeyboardInterrupt:
-        logger.warning("\nProcessing interrupted by user")
+        logger.warning("\n⏸️  Processing interrupted by user")
         sys.exit(130)
     except Exception as e:
-        logger.error(f"Unexpected error: {e}", exc_info=True)
+        logger.error(f"❌ Unexpected error: {e}", exc_info=True)
         sys.exit(1)
 
 if __name__ == "__main__":

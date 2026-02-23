@@ -37,7 +37,8 @@ class TestEndToEndWorkflow:
         # Generate LAMMPS input
         content = generate_lammps_input(
             shell_data, springs, potentials, species_map,
-            "Test Model", [100.0], 0.1, 2.0
+            "Test Model", [100.0], 0.1, 2.0,
+            500, 0.0002, 20000, 30000, 50000, "traj"
         )
         assert len(content) > 0
         assert "clear" in content

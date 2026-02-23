@@ -32,6 +32,7 @@ A robust Python script for processing shell models and generating LAMMPS structu
 ## 📦 Requirements
 
 ### Python Version
+
 - Python 3.11 or higher
 
 ### Dependencies
@@ -55,17 +56,20 @@ pytest-mock
 ## 🚀 Installation
 
 1. **Clone the repository:**
+
    ```bash
    git clone <repository-url>
    cd lammps_mpk_script
    ```
 
 2. **Activate your Python environment:**
+
    ```bash
    source ~/python_env/py311/bin/activate
    ```
 
 3. **Install dependencies:**
+
    ```bash
    pip install numpy mendeleev
    # Install pm__ modules as per your system configuration
@@ -146,14 +150,18 @@ TIMESTEP = 0.0002                  # MD timestep
 ## 📄 Output Files
 
 ### 1. `rstrt.dat`
+
 LAMMPS structure file containing:
+
 - Atom coordinates
 - Cell parameters
 - Core-shell connectivity
 - Species information
 
 ### 2. `lammps.in`
+
 Complete LAMMPS input script with:
+
 - Initialization commands
 - Force field definitions (Buckingham potentials)
 - Core-shell springs
@@ -162,7 +170,9 @@ Complete LAMMPS input script with:
 - Dump configurations
 
 ### 3. `species_id_map.txt`
+
 Maps species names to numeric IDs:
+
 ```
 Sr core 1
 Ti core 2
@@ -173,6 +183,7 @@ O shell 6
 ```
 
 ### 4. `lammps_processing.log`
+
 Detailed processing log with timestamps and debug information
 
 ## 🧪 Testing
@@ -287,8 +298,8 @@ lammps_mpk_script/
 
 - **Author**: Mukesh Khanore
 - **LAMMPS MD Logic**: Mónica Elisabet Graf and Mauro António Pereira Gonçalves
-- **Date**: 12-Feb-2026
-- **Version**: 4.0
+- **Date**: 23-Feb-2026
+- **Version**: 4.1
 
 ## 📝 License
 
@@ -298,17 +309,20 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ### Common Issues
 
-**1. ModuleNotFoundError: No module named 'pm__cell'**
+**1. ModuleNotFoundError: No module named 'pm\_\_cell'**
+
 ```
 Solution: Install the pm__ packages in your Python environment
 ```
 
 **2. File 'GS.gulp' not found**
+
 ```
 Solution: Ensure GS.gulp exists in the working directory when using symmetry='file'
 ```
 
 **3. Invalid pickle file**
+
 ```
 Solution: Verify your pickle file contains required attributes:
 - charges
@@ -317,6 +331,7 @@ Solution: Verify your pickle file contains required attributes:
 ```
 
 **4. Tests failing with import errors**
+
 ```
 Solution: Activate your py311 environment before running tests:
 source ~/python_env/py311/bin/activate
@@ -330,6 +345,7 @@ source ~/python_env/py311/bin/activate
 ## 🤝 Contributing
 
 Contributions are welcome! Please:
+
 1. Fork the repository
 2. Create a feature branch
 3. Add tests for new functionality

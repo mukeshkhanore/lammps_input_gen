@@ -10,6 +10,11 @@ from pathlib import Path
 from unittest.mock import Mock, MagicMock
 import pickle
 
+# Inject mock modules for the missing dependencies
+sys.modules['pm__cell'] = MagicMock()
+sys.modules['pm__chemical_order'] = MagicMock()
+sys.modules['pm__shell_model_kit'] = MagicMock()
+
 # Add parent directory to path to import the module under test
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

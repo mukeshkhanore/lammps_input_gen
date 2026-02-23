@@ -1,0 +1,29 @@
+2026-02-23 10:55:05,260 - mpk_lammps_ver4 - INFO - ✓ Configuration validation passed
+2026-02-23 10:55:05,274 - mpk_lammps_ver4 - INFO - ✓ Configuration validation passed
+2026-02-23 10:55:05,274 - mpk_lammps_ver4 - INFO - ✓ Configuration validation passed
+2026-02-23 10:55:05,274 - mpk_lammps_ver4 - INFO - ✓ Configuration validation passed
+2026-02-23 10:55:05,278 - mpk_lammps_ver4 - INFO - ✓ Configuration validation passed
+2026-02-23 10:55:05,286 - mpk_lammps_ver4 - INFO - ✓ Configuration validation passed
+2026-02-23 10:55:05,291 - mpk_lammps_ver4 - INFO - Loading model from /tmp/tmpuz31lav7/test_model.pickle
+2026-02-23 10:55:05,292 - mpk_lammps_ver4 - INFO - ✓ Model loaded successfully
+2026-02-23 10:55:05,292 - mpk_lammps_ver4 - INFO - ✓ Extracted shell model data for 1 species
+2026-02-23 10:55:05,292 - mpk_lammps_ver4 - INFO - ✓ Created species ID mapping for 3 species
+2026-02-23 10:55:05,292 - mpk_lammps_ver4 - INFO - ✓ Generated LAMMPS input file content
+2026-02-23 10:55:05,292 - mpk_lammps_ver4 - INFO - ✓ Successfully wrote LAMMPS input to /tmp/tmpuz31lav7/test_lammps.in
+2026-02-23 10:55:05,296 - mpk_lammps_ver4 - INFO - ✓ Configuration validation passed
+2026-02-23 10:55:05,306 - mpk_lammps_ver4 - INFO - Loading model from /tmp/tmpekxhf1ca/invalid.pickle
+2026-02-23 10:55:05,331 - mpk_lammps_ver4 - WARNING - Could not process potential {'kind': 'buck', 'sp1': 'Sr', 'part1': 'core', 'sp2': 'O', 'part2': 'shell', 'params': [1000.0, 0.3, 0.0], 'cutoffs': [0.0, 10.0]}: ('O', 'shell')
+2026-02-23 10:55:05,331 - mpk_lammps_ver4 - INFO - ✓ Generated LAMMPS input file content
+2026-02-23 10:55:05,338 - mpk_lammps_ver4 - INFO - ✓ Successfully wrote LAMMPS input to /tmp/tmp_x8jojiu/test.in
+2026-02-23 10:55:05,343 - mpk_lammps_ver4 - INFO - Loading model from /tmp/tmpsn4kr7_q/test_model.pickle
+2026-02-23 10:55:05,343 - mpk_lammps_ver4 - INFO - ✓ Model loaded successfully
+2026-02-23 10:55:05,351 - mpk_lammps_ver4 - INFO - Loading model from /tmp/tmp0zauzyyx/corrupted.pickle
+2026-02-23 10:55:05,357 - mpk_lammps_ver4 - INFO - Loading model from /tmp/tmp9p8wovep/invalid.pickle
+2026-02-23 10:55:05,359 - mpk_lammps_ver4 - INFO - Loading model from /tmp/tmpma6ka24h/empty_charges.pickle
+2026-02-23 10:55:05,359 - mpk_lammps_ver4 - INFO - ✓ Model loaded successfully
+2026-02-23 10:55:05,363 - mpk_lammps_ver4 - INFO - ✓ Extracted shell model data for 3 species
+2026-02-23 10:55:05,374 - mpk_lammps_ver4 - INFO - ✓ Extracted shell model data for 1 species
+2026-02-23 10:55:05,376 - mpk_lammps_ver4 - WARNING - Unknown part type 'unknown_part' for species Sr, skipping
+2026-02-23 10:55:05,376 - mpk_lammps_ver4 - INFO - ✓ Extracted shell model data for 1 species
+2026-02-23 10:55:05,381 - mpk_lammps_ver4 - INFO - ✓ Created species ID mapping for 3 species
+2026-02-23 10:55:05,392 - mpk_lammps_ver4 - INFO - ✓ Created species ID mapping for 3 species

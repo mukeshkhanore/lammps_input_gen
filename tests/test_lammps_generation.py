@@ -112,12 +112,12 @@ class TestGenerateTemperatureRamps:
     
     def test_single_temperature_no_ramps(self):
         """Test that single temperature produces no ramps."""
-        ramps = generate_temperature_ramps([100.0], 0.1, 2.0)
+        ramps = generate_temperature_ramps([100.0], 0.1, 2.0, 500, 0.0002, 20000, 30000, 50000, "traj")
         assert ramps == ""
     
     def test_multiple_temperatures_create_ramps(self):
         """Test that multiple temperatures create ramp sections."""
-        ramps = generate_temperature_ramps([10.0, 50.0, 100.0], 0.1, 2.0)
+        ramps = generate_temperature_ramps([10.0, 50.0, 100.0], 0.1, 2.0, 500, 0.0002, 20000, 30000, 50000, "traj")
         
         assert "50" in ramps
         assert "100" in ramps
@@ -128,7 +128,7 @@ class TestGenerateTemperatureRamps:
     
     def test_ramp_includes_equilibration_steps(self):
         """Test that ramps include equilibration steps."""
-        ramps = generate_temperature_ramps([10.0, 50.0], 0.1, 2.0)
+        ramps = generate_temperature_ramps([10.0, 50.0], 0.1, 2.0, 500, 0.0002, 20000, 30000, 50000, "traj")
         
         # Should have ramping from 10 to 50 (note: float format)
         assert "temp 10.0" in ramps  # Starting temp
@@ -162,7 +162,8 @@ class TestGenerateLammpsInput:
         
         content = generate_lammps_input(
             shell_data, springs, potentials, species_map,
-            "Test Model", [100.0], 0.1, 2.0
+            "Test Model", [100.0], 0.1, 2.0,
+            500, 0.0002, 20000, 30000, 50000, "traj"
         )
         
         assert "clear" in content
