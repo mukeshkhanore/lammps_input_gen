@@ -23,11 +23,14 @@ A robust Python script for processing shell models and generating LAMMPS structu
 - **Shell Model Processing**: Extracts and processes shell model data for perovskite materials
 - **Supercell Generation**: Creates supercells with configurable dimensions and symmetry
 - **LAMMPS Input Generation**: Automatically generates complete LAMMPS input scripts
+- **Material Type Support**: Handle both pure and mixed perovskite materials
+- **Chemical Ordering**: Support for multiple ordering types (homog, G, 1/4)
 - **Robust Error Handling**: Comprehensive validation and error reporting
 - **Logging System**: Detailed logging for debugging and tracking
 - **Multiple Temperature Support**: Generate temperature ramps for multi-stage simulations
+- **Advanced MD Parameters**: Configurable equilibration and production steps
 - **File Overwrite Protection**: Warnings before overwriting existing files
-- **Comprehensive Testing**: 62 unit and integration tests for reliability
+- **Comprehensive Testing**: 57 unit and integration tests for reliability
 
 ## 📦 Requirements
 
@@ -129,22 +132,47 @@ The script will prompt you for:
 
 ## ⚙️ Configuration
 
+### Material Types
+
+The script now supports two material types:
+
+1. **`pure`** (default): Single perovskite composition  
+   - Requires: `species_a` and `species_b` to be specified
+   - Example: ABO₃ perovskite (e.g., SrTiO₃)
+
+2. **`mix`**: Mixed perovskite composition
+   - Requires: `position` ("A" or "B"), `mix_ratio` (0.0-1.0)
+   - Example: (Sr,Ba)TiO₃ or SrTi(Mo,W)O₃
+
 ### Symmetry Options
 
 1. **`cubic`**: Standard cubic perovskite arrangement
 2. **`random`**: Random perturbations applied to atomic positions
 3. **`file`**: Read structure from `GS.gulp` file (must exist in working directory)
 
-### Constants (Configurable in Code)
+### Simulation Parameters (Configurable in Code)
 
 ```python
+# Physical Constants
 CORE_MASS_RATIO = 0.98        # 98% of mass to core
 SHELL_MASS_RATIO = 0.02       # 2% of mass to shell
 DEFAULT_RMAX = 10.0           # Cutoff radius
+
+# Simulation Control Parameters
+TIMESTEP = 0.0002                  # MD timestep (fs)
+THERMO_FREQ = 500                  # Thermodynamic output frequency
+EWALD_ACCURACY = 1.0e-6            # Ewald summation accuracy
+
+# MD Equilibration Steps
 EQUILIBRATION_TEMP_STEPS = 20000   # Temperature equilibration steps
 EQUILIBRATION_FINAL_STEPS = 30000  # Final equilibration steps
-PRODUCTION_STEPS = 50000           # Production run steps
-TIMESTEP = 0.0002                  # MD timestep
+
+# Production Run
+PRODUCTION_STEPS = 50000           # Production simulation steps
+
+# Thermostat/Barostat
+DEFAULT_T_STAT = 0.1               # Thermostat damping time constant
+DEFAULT_P_STAT = 2.0               # Barostat damping time constant
 ```
 
 ## 📄 Output Files
@@ -188,29 +216,15 @@ Detailed processing log with timestamps and debug information
 
 ## 🧪 Testing
 
-The project includes a comprehensive test suite with 62 tests.
+The project includes a comprehensive test suite with **57 tests** covering all major components.
 
 ### Run All Tests
 
 ```bash
-
 pytest -v
 ```
 
-### Run Specific Test Categories
-
-```bash
-# Configuration tests
-pytest tests/test_config.py -v
-
-# Utility function tests
-pytest tests/test_utilities.py -v
-
-# Integration tests
-pytest tests/test_integration.py -v
-```
-
-### Generate Coverage Report
+### Run with Coverage Report
 
 ```bash
 pytest --cov=mpk_lammps_ver4 --cov-report=html
@@ -218,17 +232,39 @@ pytest --cov=mpk_lammps_ver4 --cov-report=html
 
 View the report: `open htmlcov/index.html`
 
+### Run Specific Test Categories
+
+```bash
+# Configuration validation tests (17 tests)
+pytest tests/test_config.py -v
+
+# Integration tests (5 tests)
+pytest tests/test_integration.py -v
+
+# LAMMPS generation tests (13 tests)
+pytest tests/test_lammps_generation.py -v
+
+# Model loading tests (6 tests)
+pytest tests/test_model_loading.py -v
+
+# Shell model tests (10 tests)
+pytest tests/test_shell_model.py -v
+
+# Utilities tests (6 tests)
+pytest tests/test_utilities.py -v
+```
+
 ### Test Structure
 
 ```
 tests/
-├── conftest.py              # Pytest fixtures and configuration
-├── test_config.py           # Configuration validation (26 tests)
-├── test_utilities.py        # Utility functions (6 tests)
+├── conftest.py              # Pytest fixtures and mocked dependencies
+├── test_config.py           # Configuration validation (17 tests)
+├── test_integration.py      # End-to-end workflows (5 tests)
+├── test_lammps_generation.py # LAMMPS input generation (13 tests)
 ├── test_model_loading.py    # Model loading (6 tests)
-├── test_shell_model.py      # Shell model processing (9 tests)
-├── test_lammps_generation.py # LAMMPS input generation (12 tests)
-└── test_integration.py      # End-to-end workflows (3 tests)
+├── test_shell_model.py      # Shell model processing (10 tests)
+└── test_utilities.py        # Utility functions (6 tests)
 ```
 
 See [TEST_README.md](TEST_README.md) for detailed testing documentation.
@@ -261,45 +297,53 @@ lammps_mpk_script/
 ### Key Components
 
 1. **Configuration Management** (`Config` class)
-   - Validates all user inputs
-   - Centralizes configuration parameters
-   - Ensures consistency
+   - Validates all user inputs with comprehensive error checking
+   - Supports both pure and mixed material configurations
+   - Centralizes all simulation parameters
+   - Ensures consistency across the workflow
 
 2. **Model Processing**
-   - Loads pickle files
-   - Extracts shell model data
-   - Maps species to IDs
+   - Loads pickle files with validation
+   - Extracts shell model data (charges, springs, potentials)
+   - Maps species to numeric IDs
+   - Normalizes nomenclature (`shel` → `shell`)
 
 3. **Supercell Generation**
-   - Creates perovskite structures
-   - Applies chemical ordering
-   - Handles different symmetries
+   - Creates perovskite structures with specified dimensions
+   - Applies chemical ordering (homogeneous, G-type, 1/4 ordering)
+   - Handles different symmetries (cubic, random, file-based)
+   - Supports both pure and mixed compositions
 
 4. **LAMMPS Input Generation**
-   - Generates header sections
-   - Defines force fields
-   - Creates temperature ramps
-   - Configures MD settings
+   - Generates complete LAMMPS input scripts with:
+     - Initialization commands
+     - Force field definitions (Buckingham potentials)
+     - Core-shell spring constants
+     - Temperature ramps with equilibration stages
+     - NPT ensemble MD settings
+     - Dump file configurations
 
 5. **Error Handling**
-   - Custom exception hierarchy
-   - Comprehensive validation
-   - Detailed error messages
+   - Custom exception hierarchy for different error types
+   - Comprehensive input validation at every stage
+   - Detailed error messages to guide users
+   - Graceful failure with informative logging
 
 ### Design Principles
 
-- **Type Safety**: All functions have type hints
-- **Logging**: Comprehensive logging at all levels
-- **Validation**: Input validation at every stage
-- **Modularity**: Functions have single responsibilities
-- **Testing**: Extensive unit and integration tests
+- **Type Safety**: All functions have type hints for better IDE support and error checking
+- **Logging**: Comprehensive logging at all operational levels (debug, info, warning, error)
+- **Validation**: Multi-level validation ensures data integrity throughout the pipeline
+- **Modularity**: Functions have single, well-defined responsibilities
+- **Testing**: Extensive test coverage (57 tests) with mocked external dependencies
+- **Documentation**: Detailed docstrings and comprehensive readme documentation
 
 ## 👥 Credits
 
 - **Author**: Mukesh Khanore
 - **LAMMPS MD Logic**: Mónica Elisabet Graf and Mauro António Pereira Gonçalves
-- **Date**: 23-Feb-2026
-- **Version**: 4.1
+- **Date**: 26-Feb-2026
+- **Version**: 4.3
 
 ## 📝 License
 

@@ -49,7 +49,10 @@ class TestConfigClass:
             symmetry="cubic",
             t_array=[50.0],
             t_stat=0.2,
-            p_stat=1.5
+            p_stat=1.5,
+            material_type="pure",
+            species_a="Sr",
+            species_b="Ti"
         )
         # Should not raise any exception
         config.validate()
@@ -87,7 +90,12 @@ class TestConfigClass:
     def test_valid_symmetry_types(self):
         """Test that all valid symmetry types pass."""
         for sym in ["cubic", "random", "file"]:
-            config = Config(symmetry=sym)
+            config = Config(
+                symmetry=sym,
+                material_type="pure",
+                species_a="Sr",
+                species_b="Ti"
+            )
             config.validate()  # Should not raise
     
     def test_empty_temperature_array_fails(self):
@@ -104,7 +112,12 @@ class TestConfigClass:
     
     def test_zero_temperature_is_valid(self):
         """Test that zero temperature is valid (absolute zero)."""
-        config = Config(t_array=[0.0])
+        config = Config(
+            t_array=[0.0],
+            material_type="pure",
+            species_a="Sr",
+            species_b="Ti"
+        )
         config.validate()  # Should not raise
     
     def test_negative_t_stat_fails(self):
@@ -133,5 +146,10 @@ class TestConfigClass:
     
     def test_multiple_temperatures_valid(self):
         """Test that multiple temperatures are valid."""
-        config = Config(t_array=[10.0, 50.0, 100.0, 200.0])
+        config = Config(
+            t_array=[10.0, 50.0, 100.0, 200.0],
+            material_type="pure",
+            species_a="Sr",
+            species_b="Ti"
+        )
         config.validate()  # Should not raise

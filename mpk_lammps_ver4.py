@@ -6,10 +6,12 @@ This script processes shell models for LAMMPS structure and setup file generatio
 Mass ratio is set to 98% for core and 2% for shell.
 
 Author: Mukesh Khanore
-Date: 23-Feb-2026 # implemented lammps_modified_mauro_temps_v2.in 
+Date: 26-Feb-2026
+Note: Mix is implemented for file and cubic modes; random mode is still work in progress
 LAMMPS MD Logic: Mónica Elisabet Graf and Mauro António Pereira Gonçalves
-Version: 4.1 - Consistency/naming improvements, test mocking, and code clean-up.
+Version: 4.3 - Fixed shell preservation in cubic/random modes; proper FILE mode handling
 """
+
 import sys
 import os
 import logging
@@ -22,6 +24,11 @@ from mendeleev import element
 from dataclasses import dataclass, field
 import pm__cell as pmc
 import pm__chemical_order as pmco
+from datetime import datetime
+
+current_time = datetime.now()
+time_str = current_time.strftime("%H%M%S")
+seed = int(time_str)
 
 # ============================================================================
 # CONSTANTS
@@ -33,6 +40,7 @@ NEIGHBOR_DISTANCE = 1.0
 PRECISION_DECIMALS = 4
 DEFAULT_SUPERCELL_DIMS = [8, 8, 8]
 DEFAULT_TEMPERATURE = 10.0
+DEFAULT_RANDOM_SEED = seed
 DEFAULT_T_STAT = 0.1
 DEFAULT_P_STAT = 2.0
 DEFAULT_SYMMETRY = "file"
@@ -85,13 +93,14 @@ def setup_logging(log_level: str = "INFO", log_file: str = "lammps_processing.lo
         file_handler.setFormatter(file_format)
         logger.addHandler(file_handler)
     except IOError as e:
-        print(f"Warning: Could not create log file {log_file}: {e}")
+        logger.warning(f"Could not create log file {log_file}: {e}")
     
     logger.addHandler(console_handler)
     return logger
 
 # Initialize logger
 logger = setup_logging()
+logger.info(f"Generated seed from current time {current_time.strftime('%H:%M:%S')}: {seed}")
 
 # ============================================================================
 # CUSTOM EXCEPTIONS
@@ -131,6 +140,11 @@ class Config:
     equilibration_final_steps: int = DEFAULT_EQUILIBRATION_FINAL_STEPS
     production_steps: int = DEFAULT_PRODUCTION_STEPS
     traj_name: str = DEFAULT_TRAJ_NAME
+    material_type: str = "pure"
+    species_a: Optional[str] = None
+    species_b: Optional[str] = None
+    position: Optional[str] = None
+    mix_ratio: Optional[float] = None
     
     def validate(self) -> None:
         """
@@ -215,6 +229,28 @@ class Config:
         # Validate trajectory name
         if not self.traj_name:
             raise ConfigurationError("Trajectory name cannot be empty")
+        
+        # Validate material type
+        if self.material_type not in ["pure", "mix"]:
+            raise ConfigurationError(
+                f"Material type must be 'pure' or 'mix', got '{self.material_type}'"
+            )
+        
+        # Validate species based on material type
+        if self.material_type == "pure":
+            if not self.species_a or not self.species_b:
+                raise ConfigurationError(
+                    "For pure material, both species_a and species_b must be specified"
+                )
+        elif self.material_type == "mix":
+            if not self.position or not self.mix_ratio:
+                raise ConfigurationError(
+                    "For mix material, position and mix_ratio must be specified"
+                )
+            if self.position not in ["A", "B"]:
+                raise ConfigurationError(
+                    f"Position must be 'A' or 'B', got '{self.position}'"
+                )
         
         logger.info("✓ Configuration validation passed")
 
@@ -334,16 +370,22 @@ def extract_shell_model_data(model: Any) -> Tuple[Dict, Dict, List]:
 # ============================================================================
 # SPECIES ID MAPPING
 # ============================================================================
-def create_species_id_map(cell: Any, model: Any) -> Dict:
+def create_species_id_map(cell: Any, model: Any, species_a: Optional[str] = None, species_b: Optional[str] = None) -> Dict:
     """
     Create mapping between species+part and numeric IDs.
+    
+    Supports user-specified species with backward compatibility:
+      - If species_a and species_b are provided: builds map from user input
+      - If not provided (None): falls back to model.AB_specie
     
     Args:
         cell: Cell object with species information
         model: Model object with species information
+        species_a: User-specified A-site species (e.g., "Ba" or "Ba/Ca"), optional
+        species_b: User-specified B-site species (e.g., "Ti" or "Zr/Sn"), optional
         
     Returns:
-        Dict: Mapping from (species, part) to numeric ID
+        Dict: Mapping from (species, part) to numeric ID, following ABO order
         
     Raises:
         ValidationError: If species data is invalid
@@ -351,26 +393,59 @@ def create_species_id_map(cell: Any, model: Any) -> Dict:
     try:
         species_id_map = {}
         species_list = []
+        source_description = ""
         
         if not hasattr(model, 'AB_specie'):
             raise ValidationError("Model missing AB_specie attribute")
         
-        # Build species list
-        if "A" in model.AB_specie:
-            species_list.extend(model.AB_specie["A"])
-        if "B" in model.AB_specie:
-            species_list.extend(model.AB_specie["B"])
+        # Determine whether to use user-specified species or model defaults
+        if species_a is not None and species_b is not None:
+            # Build species list from user input
+            source_description = "user-specified"
+            replacements_a = species_a
+            replacements_b = species_b
+            
+            # Extract A-site species (handle single or mixed like "Ba" or "Ba/Ca")
+            species_a_list = [s.strip() for s in replacements_a.split('/')]
+            for sp in species_a_list:
+                if sp and sp not in species_list:
+                    species_list.append(sp)
+            
+            # Extract B-site species (handle single or mixed like "Ti" or "Zr/Sn")
+            species_b_list = [s.strip() for s in replacements_b.split('/')]
+            for sp in species_b_list:
+                if sp and sp not in species_list:
+                    species_list.append(sp)
+            
+            # Validate that all user-specified species exist in model.charges
+            if hasattr(model, 'charges') and model.charges:
+                available_species = {charge.species for charge in model.charges}
+                for sp in species_list:
+                    if sp != "O" and sp not in available_species:
+                        logger.warning(
+                            f"⚠️  Species '{sp}' specified by user not found in model.charges. "
+                            f"It will have None for charge and spring constants. "
+                            f"Available species: {sorted(available_species)}"
+                        )
+        else:
+            # Fall back to model defaults (backward compatible)
+            source_description = "model.AB_specie (backward compatible fallback)"
+            
+            if "A" in model.AB_specie:
+                species_list.extend(model.AB_specie["A"])
+            if "B" in model.AB_specie:
+                species_list.extend(model.AB_specie["B"])
         
         # Add oxygen if not already present
         if "O" not in species_list:
             species_list.append("O")
         
-        # Create ID mapping
+        # Create ID mapping following ABO order: A-site → B-site → O
         for i, species in enumerate(species_list):
             species_id_map[(species, 'core')] = (i + 1)
             species_id_map[(species, 'shell')] = (len(species_list) + i + 1)
         
-        logger.info(f"✓ Created species ID mapping for {len(species_list)} species")
+        logger.info(f"✓ Created species ID mapping from {source_description} for {len(species_list)} species: {species_list}")
         logger.debug(f"  Species ID map: {species_id_map}")
         
         return species_id_map
@@ -385,30 +460,135 @@ def create_mapped_cell(original_cell: Any, species_id_map: Dict) -> Any:
     """
     Create a new cell with IDs mapped according to species_id_map.
     
+    Atoms are sorted in ABO order with each core immediately followed by its shell:
+    A1_core1, A1_shell1, A1_core2, A1_shell2, ..., A2_core1, A2_shell1, ..., B1_core1, B1_shell1, ..., O_core1, O_shell1, ...
+    
     Args:
         original_cell: Original cell object
         species_id_map: Mapping from (species, part) to numeric ID
         
     Returns:
-        Any: New cell with mapped IDs
+        Any: New cell with mapped IDs, atoms sorted in ABO order with core-shell pairs
     """
     new_cell = pmc.Cell(convention='zerolist', prescribe_N=0)
     new_cell.lattice = copy.deepcopy(original_cell.lattice)
     
-    for atom in original_cell.atom:
-        cs = "core" if atom.coreshell == 'core' else "shell"
+    # Calculate number of species (cores and shells have separate IDs)
+    num_species = len(species_id_map) // 2
+    
+    # Separate cores and shells, build lookup structures
+    cores_by_species = {}  # {species_name: [(idx, atom), ...]}
+    shells_by_species = {}  # {species_name: [(idx, atom), ...]}
+    
+    for idx, atom in enumerate(original_cell.atom):
+        # Normalize coreshell attribute
+        coreshell_raw = str(atom.coreshell).lower().strip() if atom.coreshell else ""
+        is_core = coreshell_raw in ('core', 'cor')
         
-        if (atom.name, cs) not in species_id_map:
-            logger.warning(f"Species ({atom.name}, {cs}) not in species_id_map, skipping")
-            continue
+        species_name = atom.name
         
+        if is_core:
+            if species_name not in cores_by_species:
+                cores_by_species[species_name] = []
+            cores_by_species[species_name].append((idx, atom))
+        else:
+            if species_name not in shells_by_species:
+                shells_by_species[species_name] = []
+            shells_by_species[species_name].append((idx, atom))
+    
+    # Build list of atoms to add, pairing cores with their nearest shell
+    atoms_to_add = []
+    
+    # Get species order from species_id_map (already in ABO order)
+    species_order = []
+    for (species, part), _ in sorted(species_id_map.items(), key=lambda x: x[1]):
+        if part == 'core' and species not in species_order:
+            species_order.append(species)
+    
+    for species_name in species_order:
+        cores = cores_by_species.get(species_name, [])
+        shells = shells_by_species.get(species_name, [])
+        
+        # Track which shells have been paired
+        used_shell_indices = set()
+        
+        for core_idx, core_atom in cores:
+            # Find the nearest unpaired shell for this core
+            core_pos = np.array(core_atom.position_frac)
+            best_shell = None
+            best_dist = float('inf')
+            best_shell_list_idx = None
+            
+            for shell_list_idx, (shell_idx, shell_atom) in enumerate(shells):
+                if shell_list_idx in used_shell_indices:
+                    continue
+                shell_pos = np.array(shell_atom.position_frac)
+                # Calculate distance (considering periodic boundaries approximately)
+                diff = core_pos - shell_pos
+                # Apply minimum image convention for periodic boundaries
+                diff = diff - np.round(diff)
+                dist = np.linalg.norm(diff)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_shell = (shell_idx, shell_atom)
+                    best_shell_list_idx = shell_list_idx
+            
+            # Get mapped IDs
+            core_mapped_id = species_id_map.get((species_name, 'core'))
+            shell_mapped_id = species_id_map.get((species_name, 'shell'))
+            
+            if core_mapped_id is None:
+                logger.warning(f"Species ({species_name}, core) not in species_id_map, skipping")
+                continue
+            
+            # Calculate species_index for sorting
+            species_index = core_mapped_id - 1
+            
+            # Add core first
+            atoms_to_add.append({
+                'mapped_id': core_mapped_id,
+                'position_frac': core_atom.position_frac,
+                'coreshell': core_atom.coreshell,
+                'species_index': species_index,
+                'pair_order': len(atoms_to_add)  # Order within this species
+            })
+            
+            # Add paired shell immediately after core
+            if best_shell is not None and shell_mapped_id is not None:
+                used_shell_indices.add(best_shell_list_idx)
+                _, shell_atom = best_shell
+                atoms_to_add.append({
+                    'mapped_id': shell_mapped_id,
+                    'position_frac': shell_atom.position_frac,
+                    'coreshell': shell_atom.coreshell,
+                    'species_index': species_index,
+                    'pair_order': len(atoms_to_add)
+                })
+        
+        # Handle any remaining unpaired shells
+        for shell_list_idx, (shell_idx, shell_atom) in enumerate(shells):
+            if shell_list_idx not in used_shell_indices:
+                shell_mapped_id = species_id_map.get((species_name, 'shell'))
+                if shell_mapped_id is not None:
+                    species_index = shell_mapped_id - num_species - 1
+                    atoms_to_add.append({
+                        'mapped_id': shell_mapped_id,
+                        'position_frac': shell_atom.position_frac,
+                        'coreshell': shell_atom.coreshell,
+                        'species_index': species_index,
+                        'pair_order': len(atoms_to_add)
+                    })
+                    logger.warning(f"Unpaired shell found for {species_name}")
+    
+    # Add sorted atoms to the new cell (already in correct order from above)
+    for atom_data in atoms_to_add:
         new_cell.appendAtom(
-            name=species_id_map[(atom.name, cs)],
-            position_frac=atom.position_frac,
-            coreshell=atom.coreshell
+            name=atom_data['mapped_id'],
+            position_frac=atom_data['position_frac'],
+            coreshell=atom_data['coreshell']
         )
     
-    logger.info(f"✓ Created mapped cell with {new_cell.N} atoms")
+    logger.info(f"✓ Created mapped cell with {new_cell.N} atoms (ABO order, core followed by its shell)")
     return new_cell
 
 def initialize_shell_models_data(cell: Any) -> Dict:
@@ -451,12 +631,18 @@ def map_charges_to_new_model(shell_models_data: Dict, species_id_map: Dict,
         try:
             species_mass = element(species).atomic_weight
             logger.debug(f"Processing species: {species} with atomic weight: {species_mass}")
-        except Exception as e:
-            raise ValidationError(f"Failed to get atomic weight for species '{species}': {e}")
+        except (ValueError, AttributeError, KeyError) as e:
+            raise ValidationError(f"Failed to get atomic weight for species '{species}': {e}") from e
         
         for id_key, mapped_id in species_id_map.items():
             if id_key[0] == species:
                 part = id_key[1]
+                
+                # Validate key existence before access
+                if species not in shell_models_data.get('model', {}):
+                    raise ValidationError(f"Species '{species}' not found in shell model data")
+                if part not in shell_models_data['model'][species]:
+                    raise ValidationError(f"Part '{part}' not found for species '{species}'")
                 
                 if mapped_id not in shell_models_data_new['model']:
                     logger.warning(f"Mapped ID {mapped_id} not in new model, skipping")
@@ -522,24 +708,37 @@ def create_string_named_cell(numeric_cell: Any) -> Any:
     
     return string_cell
 
+
 # ============================================================================
-# SUPERCELL CREATION
+# SUPERCELL CREATION - MAIN FUNCTION
 # ============================================================================
-def create_supercell(model: Any, supercell_dims: List[int], symmetry: str = "cubic") -> Any:
+def create_supercell(model: Any, supercell_dims: List[int], symmetry: str = "cubic", material_type: str = "mix", 
+                     species_a: Optional[str] = None, species_b: Optional[str] = None, position: str = "A", mix_ratio: float = 0.5) -> Any:
     """
     Create a supercell with specified dimensions and symmetry.
+    
+    Supports three symmetry modes:
+      - "file": Reads structure from GS.gulp file
+      - "cubic": Uses chemical order without random mixing
+      - "random": Uses chemical order with random species assignment
     
     Args:
         model: Model containing chemical order information
         supercell_dims: Dimensions [Nx, Ny, Nz] of the supercell
-        symmetry: Type of symmetry ("cubic", "random", or "file")
+        symmetry: Type of symmetry ("file", "cubic", or "random")
+        material_type: Type of material ("pure", "mix", etc.)
+        species_a: First species in the material (e.g., "Ba")
+        species_b: Second species in the material (e.g., "Ti")
+        position: Position where mixing occurs ("A" or "B")
+        mix_ratio: Mixing ratio (fraction of first species)
         
     Returns:
         Any: Cell object representing the supercell
         
     Raises:
         FileNotFoundError: If symmetry is "file" and GS.gulp is not found
-        ValidationError: If model data is incomplete
+        ValidationError: If model data is incomplete or invalid
+        LAMMPSProcessingError: If structure creation fails
     """
     nx, ny, nz = supercell_dims
     
@@ -561,8 +760,8 @@ def create_supercell(model: Any, supercell_dims: List[int], symmetry: str = "cub
             logger.info(f"✓ Successfully created supercell from {gulp_file}")
             return cell
             
-        except Exception as e:
-            raise LAMMPSProcessingError(f"Error processing GULP file '{gulp_file}': {e}")
+        except (OSError, IOError, ValueError, AttributeError, TypeError) as e:
+            raise LAMMPSProcessingError(f"Error processing GULP file '{gulp_file}': {e}") from e
     
     else:
         # Validate model has required chemical order information
@@ -578,24 +777,78 @@ def create_supercell(model: Any, supercell_dims: List[int], symmetry: str = "cub
         except Exception as e:
             raise ValidationError(f"Failed to create chemical order: {e}")
         
+        # Determine species to use: user-provided or model's default (backward compatible)
+        # IMPORTANT: prescribeChemicalOrderForBox() expects a list format, not string
+        if species_a is None:
+            if not hasattr(model, 'AB_specie') or "A" not in model.AB_specie:
+                raise ValidationError("No species_a provided and model.AB_specie['A'] not found")
+            replacements_a = model.AB_specie["A"]  # Already a list from model
+            logger.debug(f"Using species from model for A-site: {replacements_a}")
+        else:
+            # Parse user input string into list format that prescribeChemicalOrderForBox() expects
+            if '/' in species_a:
+                replacements_a = [s.strip() for s in species_a.split('/')]
+            else:
+                replacements_a = [species_a.strip()]
+            logger.info(f"Using user-specified species for A-site: {replacements_a}")
+        
+        if species_b is None:
+            if not hasattr(model, 'AB_specie') or "B" not in model.AB_specie:
+                raise ValidationError("No species_b provided and model.AB_specie['B'] not found")
+            replacements_b = model.AB_specie["B"]  # Already a list from model
+            logger.debug(f"Using species from model for B-site: {replacements_b}")
+        else:
+            # Parse user input string into list format that prescribeChemicalOrderForBox() expects
+            if '/' in species_b:
+                replacements_b = [s.strip() for s in species_b.split('/')]
+            else:
+                replacements_b = [species_b.strip()]
+            logger.info(f"Using user-specified species for B-site: {replacements_b}")
+        
+        # Validate that custom species exist in model charges
+        if not hasattr(model, 'charges') or not model.charges:
+            raise ValidationError("Model has no charge information to validate species")
+        
+        available_species = {charge.species for charge in model.charges}
+        
+        # Validate species_a (can be single like "Ba" or mixed like "Ba/Ca")
+        if species_a is not None:
+            species_a_list = [s.strip() for s in species_a.split('/')]
+            for sp in species_a_list:
+                if sp not in available_species:
+                    raise ValidationError(
+                        f"Custom species '{sp}' (from species_a='{species_a}') not found in model. "
+                        f"Available species: {sorted(list(available_species))}"
+                    )
+        
+        # Validate species_b (can be single like "Ti" or mixed like "Zr/Sn")
+        if species_b is not None:
+            species_b_list = [s.strip() for s in species_b.split('/')]
+            for sp in species_b_list:
+                if sp not in available_species:
+                    raise ValidationError(
+                        f"Custom species '{sp}' (from species_b='{species_b}') not found in model. "
+                        f"Available species: {sorted(list(available_species))}"
+                    )
+        
         # Prepare structure
         cell = pmc.Cell(convention='zerolist', prescribe_N=0)
         cell.is_shell_model = True
         cell.simplePerovskite(ABO_names=["A", "B", "O"], dimensions=[nx, ny, nz], coreshell=True)
         
-        # Apply chemical order
+        # Apply chemical order with selected species
         try:
             cell = chemical_order_A.prescribeChemicalOrderForBox(
-                cell, position="A", replacements=model.AB_specie["A"], 
+                cell, position="A", replacements=replacements_a, 
                 dimensions=[nx, ny, nz], coreshell=True
             )
             cell = chemical_order_B.prescribeChemicalOrderForBox(
-                cell, position="B", replacements=model.AB_specie["B"], 
+                cell, position="B", replacements=replacements_b, 
                 dimensions=[nx, ny, nz], coreshell=True
             )
             cell.pairCoresShells()
-        except Exception as e:
-            raise LAMMPSProcessingError(f"Failed to apply chemical order: {e}")
+        except (AttributeError, ValueError, TypeError, KeyError) as e:
+            raise LAMMPSProcessingError(f"Failed to apply chemical order: {e}") from e
         
         # Apply perturbation for random symmetry
         perturbation = np.zeros((cell.N, 3))
@@ -604,11 +857,32 @@ def create_supercell(model: Any, supercell_dims: List[int], symmetry: str = "cub
             for i in range(cell.N):
                 perturbation[i] = np.random.uniform(-0.05, 0.05, 3)
         
-        # Order species
+        # Order species in ABO order: all A-site species, then all B-site species, then oxygen (like gs.gulp)
         species_order = []
-        for charge in model.charges:
-            if charge.species not in species_order:
-                species_order.append(charge.species)
+        
+        # Add A-site species
+        if isinstance(replacements_a, (list, tuple)):
+            for sp in replacements_a:
+                if sp not in species_order:
+                    species_order.append(sp)
+        else:
+            if replacements_a not in species_order:
+                species_order.append(replacements_a)
+        
+        # Add B-site species
+        if isinstance(replacements_b, (list, tuple)):
+            for sp in replacements_b:
+                if sp not in species_order:
+                    species_order.append(sp)
+        else:
+            if replacements_b not in species_order:
+                species_order.append(replacements_b)
+        
+        # Add oxygen
+        if "O" not in species_order:
+            species_order.append("O")
+        
+        logger.info(f"Using ABO species order: A-site={replacements_a}, B-site={replacements_b}, O=oxygen")
         
         # Finalize cell
         cell.countPresentSpecies()
@@ -623,7 +897,8 @@ def create_supercell(model: Any, supercell_dims: List[int], symmetry: str = "cub
 # ============================================================================
 # SHELL MODEL PROCESSING
 # ============================================================================
-def process_shell_model(model: Any, cell: Any, output_filename: str = "structure") -> Tuple[Any, Any]:
+def process_shell_model(model: Any, cell: Any, output_filename: str = "structure", 
+                        species_a: Optional[str] = None, species_b: Optional[str] = None) -> Tuple[Any, Any, Dict, Dict, List, Dict]:
     """
     Process shell model and save to LAMMPS structure.
     
@@ -631,9 +906,17 @@ def process_shell_model(model: Any, cell: Any, output_filename: str = "structure
         model: Model containing charges information
         cell: Cell object to process
         output_filename: Base name for output files
+        species_a: User-specified A-site species (e.g., "Ba" or "Ba/Ca"), optional
+        species_b: User-specified B-site species (e.g., "Ti" or "Zr/Sn"), optional
         
     Returns:
-        Tuple[Any, Any]: Tuple containing mapped_cell and string_cell
+        Tuple containing:
+            - mapped_cell: Cell with numeric IDs
+            - string_cell: Cell with string atom names
+            - shell_models_data: Shell model data dictionary
+            - shell_models_springs: Spring constants dictionary
+            - shell_models_potentials: List of potential parameters
+            - species_id_map: Mapping of (species, part) to numeric ID
         
     Raises:
         LAMMPSProcessingError: If processing fails
@@ -642,8 +925,8 @@ def process_shell_model(model: Any, cell: Any, output_filename: str = "structure
         # Extract shell model data
         shell_models_data, shell_models_springs, shell_models_potentials = extract_shell_model_data(model)
         
-        # Create species ID mapping
-        species_id_map = create_species_id_map(cell, model)
+        # Create species ID mapping using user-specified species (or fall back to model defaults)
+        species_id_map = create_species_id_map(cell, model, species_a, species_b)
         
         # Create new cell with mapped IDs
         mapped_cell = create_mapped_cell(cell, species_id_map)
@@ -670,14 +953,16 @@ def process_shell_model(model: Any, cell: Any, output_filename: str = "structure
             string_cell.writeToLAMMPSStructure(output_filename)
             logger.info(f"✓ Successfully wrote LAMMPS structure to {output_filename}")
         except Exception as e:
-            raise LAMMPSProcessingError(f"Error writing LAMMPS structure: {e}")
+            raise LAMMPSProcessingError(f"Error writing LAMMPS structure: {e}") from e
         
-        return mapped_cell, string_cell
+        return mapped_cell, string_cell, shell_models_data_new, shell_models_springs, shell_models_potentials, species_id_map
         
-    except Exception as e:
-        logger.error(f"Shell model processing failed: {e}")
+    except (ValidationError, LAMMPSProcessingError):
+        logger.error(f"Shell model processing failed", exc_info=True)
         raise
-
+    except Exception as e:
+        logger.error(f"Unexpected error in shell model processing: {e}", exc_info=True)
+        raise LAMMPSProcessingError(f"Shell model processing failed: {e}") from e
 # ============================================================================
 # MODEL LOADING
 # ============================================================================
@@ -713,9 +998,9 @@ def load_model(file_path: str) -> Any:
         return model
         
     except pickle.UnpicklingError as e:
-        raise ModelLoadError(f"Failed to unpickle model file: {e}")
-    except Exception as e:
-        raise ModelLoadError(f"Error loading model from {file_path}: {e}")
+        raise ModelLoadError(f"Failed to unpickle model file: {e}") from e
+    except (OSError, IOError, ValueError, AttributeError) as e:
+        raise ModelLoadError(f"Error loading model from {file_path}: {e}") from e
 
 # ============================================================================
 # LAMMPS INPUT GENERATION
@@ -767,6 +1052,13 @@ def generate_group_definitions(species_id_map: Dict) -> str:
     """Generate group definitions for cores and shells."""
     core_types = [id_val for (species, part), id_val in species_id_map.items() if part == 'core']
     shell_types = [id_val for (species, part), id_val in species_id_map.items() if part == 'shell']
+    
+    # Validate that we have both core and shell types
+    if not core_types:
+        raise ValidationError("No core types found in species ID map")
+    if not shell_types:
+        raise ValidationError("No shell types found in species ID map")
+    
     species_types = list(dict.fromkeys([species for (species, part), _ in species_id_map.items() if part == 'core']))
     
     core_types_str = ' '.join(str(t) for t in sorted(core_types))
@@ -787,6 +1079,10 @@ comm_modify vel yes #comment again after test (Pavel has it commented)
 def generate_potential_section(model_name: str, shell_models_potentials: List, 
                                 species_id_map: Dict) -> str:
     """Generate potential definitions section."""
+    # Validate that we have potentials to process
+    if not shell_models_potentials:
+        logger.warning("No shell model potentials provided - using default section")
+    
     rmax = DEFAULT_RMAX
     if shell_models_potentials and 'cutoffs' in shell_models_potentials[0]:
         _, potential_rmax = shell_models_potentials[0]['cutoffs']
@@ -912,8 +1208,8 @@ def generate_temperature_ramps(t_array: List[float], t_stat: float, p_stat: floa
     
     lines = []
     for i, t in enumerate(t_array[1:]):
-        prev_temp = t_array[i]  # Previous temperature
-        curr_temp = t  # Current temperature
+        prev_temp = t_array[i]
+        curr_temp = t
         
         lines.append(f"""
 # ----------------------- Equilibration {curr_temp}K  ---------------------------------------------
@@ -929,7 +1225,7 @@ run {equilibration_final_steps}
 unfix npt_equ 
 
 # ----------------------- Production {curr_temp}K ---------------------------------------------
-#
+
 fix npt all npt temp {curr_temp} {curr_temp} {t_stat} tri 0.0 0.0 {p_stat}
 fix_modify npt temp CSequ
 
@@ -954,30 +1250,10 @@ def generate_lammps_input(shell_models_data: Dict, shell_models_springs: Dict,
                            production_steps: int, traj_name: str) -> str:
     """
     Generate complete LAMMPS input file content.
-    
-    Args:
-        shell_models_data: Shell model data dictionary
-        shell_models_springs: Spring constants for core-shell pairs
-        shell_models_potentials: List of potential parameters
-        species_id_map: Mapping of species to type IDs
-        model_name: Name of the model
-        t_array: Array of temperatures for simulation
-        t_stat: Thermostat damping time
-        p_stat: Barostat damping time
-        thermo_freq: Thermo output frequency
-        timestep: MD timestep in fs
-        equilibration_temp_steps: Number of temperature equilibration steps
-        equilibration_final_steps: Number of final equilibration steps
-        production_steps: Number of production steps
-        traj_name: Trajectory filename prefix
-        
-    Returns:
-        str: Complete LAMMPS input file content
     """
     try:
         initial_temp = t_array[0]
         
-        # Build the input file in sections
         sections = [
             generate_lammps_header(model_name),
             "\n",
@@ -997,23 +1273,18 @@ def generate_lammps_input(shell_models_data: Dict, shell_models_springs: Dict,
         logger.info("✓ Generated LAMMPS input file content")
         return content
         
+    except (ValidationError, LAMMPSProcessingError):
+        logger.error(f"Failed to generate LAMMPS input", exc_info=True)
+        raise
     except Exception as e:
-        logger.error(f"Failed to generate LAMMPS input: {e}")
-        raise LAMMPSProcessingError(f"LAMMPS input generation failed: {e}")
+        logger.error(f"Unexpected error in LAMMPS input generation: {e}", exc_info=True)
+        raise LAMMPSProcessingError(f"LAMMPS input generation failed: {e}") from e
 
 def save_lammps_input(content: str, filename: str = "lammps.in") -> None:
     """
     Save LAMMPS input content to file with error handling.
-    
-    Args:
-        content: LAMMPS input file content
-        filename: Output filename
-        
-    Raises:
-        LAMMPSProcessingError: If file writing fails
     """
     try:
-        # Check if file already exists
         if os.path.exists(filename):
             logger.warning(f"⚠️  File '{filename}' already exists - OVERWRITING")
         
@@ -1029,9 +1300,6 @@ def save_lammps_input(content: str, filename: str = "lammps.in") -> None:
 def get_user_config() -> Config:
     """
     Get configuration parameters from user input.
-    
-    Returns:
-        Config: Configuration object with validated parameters
     """
     logger.info("=" * 70)
     logger.info("🔧 Shell Model Processing for LAMMPS - Configuration")
@@ -1042,6 +1310,130 @@ def get_user_config() -> Config:
     if not model_file:
         model_file = DEFAULT_MODEL_FILE
     
+    # Material type
+    while True:
+        material_type = input("\nEnter material type (mix/pure) [default: pure]: ").strip().lower()
+        if not material_type:
+            material_type = "pure"
+        
+        if material_type not in ["mix", "pure"]:
+            logger.error("❌ Error: Please enter either 'mix' or 'pure'")
+            continue
+        
+        logger.info(f"✓ Material type selected: {material_type}")
+        break
+    
+    position = None
+    species_a = None
+    species_b = None
+    mix_ratio = None
+    
+    if material_type == "mix":
+        while True:
+            position = input("\nEnter position (A/B) [default: A]: ").strip().upper()
+            if not position:
+                position = "A"
+            
+            if position not in ["A", "B"]:
+                logger.error("❌ Error: Please enter either 'A' or 'B'")
+                continue
+            
+            logger.info(f"✓ Position selected: {position}")
+            break
+        
+        while True:
+            mix_species = input(f"\nEnter the two species to mix for position {position} (separated by space) [e.g., Ba Ca]: ").strip()
+            if not mix_species or ' ' not in mix_species:
+                logger.error("❌ Error: Please enter two species separated by a space")
+                continue
+            
+            parts = [s.strip() for s in mix_species.split()]
+            if len(parts) != 2 or not parts[0] or not parts[1]:
+                logger.error("❌ Error: Please enter exactly two valid species separated by a space")
+                continue
+            
+            if ',' in parts[0] or '/' in parts[0] or ',' in parts[1] or '/' in parts[1]:
+                logger.error("❌ Error: Please enter only atomic symbols without commas or slashes")
+                continue
+                
+            species_1, species_2 = parts[0], parts[1]
+            logger.info(f"✓ Mixed species selected: {species_1} and {species_2}")
+            break
+            
+        while True:
+            mix_ratio_input = input(f"\nEnter fraction of {species_1} (0.0 to 1.0) [e.g., 0.5 for 50:50]: ").strip()
+            if not mix_ratio_input:
+                logger.error("❌ Error: Mix ratio cannot be empty")
+                continue
+            
+            try:
+                mix_ratio = float(mix_ratio_input)
+                if mix_ratio < 0.0 or mix_ratio > 1.0:
+                    logger.error("❌ Error: Fraction must be between 0.0 and 1.0")
+                    continue
+                
+                logger.info(f"✓ Mix fraction selected: {mix_ratio} for {species_1} (and {1.0 - mix_ratio:.3g} for {species_2})")
+                break
+                
+            except ValueError:
+                logger.error("❌ Error: Please enter a valid decimal number")
+        
+        if position == "A":
+            species_a = f"{species_1}/{species_2}"
+            while True:
+                species_b = input("\nEnter single species for remaining B site [e.g., Ti, Zr, Sn]: ").strip()
+                if not species_b:
+                    logger.error("❌ Error: Species B cannot be empty")
+                    continue
+                
+                if ' ' in species_b or ',' in species_b:
+                    logger.error("❌ Error: Please enter only ONE species for B site")
+                    continue
+                
+                logger.info(f"✓ Species B selected: {species_b}")
+                break
+        else:
+            species_b = f"{species_1}/{species_2}"
+            while True:
+                species_a = input("\nEnter single species for remaining A site [e.g., Ba, Ca, Pb]: ").strip()
+                if not species_a:
+                    logger.error("❌ Error: Species A cannot be empty")
+                    continue
+                
+                if ' ' in species_a or ',' in species_a:
+                    logger.error("❌ Error: Please enter only ONE species for A site")
+                    continue
+                
+                logger.info(f"✓ Species A selected: {species_a}")
+                break
+    
+    else:
+        while True:
+            species_a = input("\nEnter single species for A site [e.g., Ba, Ca, Pb]: ").strip()
+            if not species_a:
+                logger.error("❌ Error: Species A cannot be empty")
+                continue
+            
+            if ' ' in species_a or ',' in species_a:
+                logger.error("❌ Error: Please enter only ONE species for A site")
+                continue
+            
+            logger.info(f"✓ Species A selected: {species_a}")
+            break
+        
+        while True:
+            species_b = input("\nEnter single species for B site [e.g., Ti, Zr, Sn]: ").strip()
+            if not species_b:
+                logger.error("❌ Error: Species B cannot be empty")
+                continue
+            
+            if ' ' in species_b or ',' in species_b:
+                logger.error("❌ Error: Please enter only ONE species for B site")
+                continue
+            
+            logger.info(f"✓ Species B selected: {species_b}")
+            break
+
     # Supercell dimensions
     while True:
         try:
@@ -1068,7 +1460,7 @@ def get_user_config() -> Config:
     # Temperature array
     while True:
         try:
-            t_array_input = input(f"\nEnter temperature array (space-separated values) [default: {DEFAULT_TEMPERATURE}]: ").strip()
+            t_array_input = input(f"\nEnter temperature array (space-separated) [default: {DEFAULT_TEMPERATURE}]: ").strip()
             if not t_array_input:
                 t_array = [DEFAULT_TEMPERATURE]
             else:
@@ -1083,7 +1475,7 @@ def get_user_config() -> Config:
     # Thermostat damping
     while True:
         try:
-            t_stat = float(input(f"\nEnter thermostat damping time (t_stat) in fs [default: {DEFAULT_T_STAT}]: ").strip() or str(DEFAULT_T_STAT))
+            t_stat = float(input(f"\nEnter thermostat damping time (fs) [default: {DEFAULT_T_STAT}]: ").strip() or str(DEFAULT_T_STAT))
             if t_stat <= 0:
                 logger.error("❌ Error: Thermostat damping must be positive")
                 continue
@@ -1094,7 +1486,7 @@ def get_user_config() -> Config:
     # Barostat damping
     while True:
         try:
-            p_stat = float(input(f"\nEnter barostat damping time (p_stat) in fs [default: {DEFAULT_P_STAT}]: ").strip() or str(DEFAULT_P_STAT))
+            p_stat = float(input(f"\nEnter barostat damping time (fs) [default: {DEFAULT_P_STAT}]: ").strip() or str(DEFAULT_P_STAT))
             if p_stat <= 0:
                 logger.error("❌ Error: Barostat damping must be positive")
                 continue
@@ -1105,7 +1497,7 @@ def get_user_config() -> Config:
     # THERMO_FREQ
     while True:
         try:
-            thermo_freq = int(input(f"\nEnter thermo frequency (THERMO_FREQ) [default: {DEFAULT_THERMO_FREQ}]: ").strip() or str(DEFAULT_THERMO_FREQ))
+            thermo_freq = int(input(f"\nEnter thermo frequency [default: {DEFAULT_THERMO_FREQ}]: ").strip() or str(DEFAULT_THERMO_FREQ))
             if thermo_freq <= 0:
                 logger.error("❌ Error: Thermo frequency must be positive")
                 continue
@@ -1116,7 +1508,7 @@ def get_user_config() -> Config:
     # TIMESTEP
     while True:
         try:
-            timestep = float(input(f"\nEnter timestep in fs [default: {DEFAULT_TIMESTEP}]: ").strip() or str(DEFAULT_TIMESTEP))
+            timestep = float(input(f"\nEnter timestep (fs) [default: {DEFAULT_TIMESTEP}]: ").strip() or str(DEFAULT_TIMESTEP))
             if timestep <= 0:
                 logger.error("❌ Error: Timestep must be positive")
                 continue
@@ -1129,7 +1521,7 @@ def get_user_config() -> Config:
         try:
             equilibration_temp_steps = int(input(f"\nEnter equilibration temperature steps [default: {DEFAULT_EQUILIBRATION_TEMP_STEPS}]: ").strip() or str(DEFAULT_EQUILIBRATION_TEMP_STEPS))
             if equilibration_temp_steps <= 0:
-                logger.error("❌ Error: Equilibration temperature steps must be positive")
+                logger.error("❌ Error: Must be positive")
                 continue
             break
         except ValueError:
@@ -1140,7 +1532,7 @@ def get_user_config() -> Config:
         try:
             equilibration_final_steps = int(input(f"\nEnter equilibration final steps [default: {DEFAULT_EQUILIBRATION_FINAL_STEPS}]: ").strip() or str(DEFAULT_EQUILIBRATION_FINAL_STEPS))
             if equilibration_final_steps <= 0:
-                logger.error("❌ Error: Equilibration final steps must be positive")
+                logger.error("❌ Error: Must be positive")
                 continue
             break
         except ValueError:
@@ -1151,7 +1543,7 @@ def get_user_config() -> Config:
         try:
             production_steps = int(input(f"\nEnter production steps [default: {DEFAULT_PRODUCTION_STEPS}]: ").strip() or str(DEFAULT_PRODUCTION_STEPS))
             if production_steps <= 0:
-                logger.error("❌ Error: Production steps must be positive")
+                logger.error("❌ Error: Must be positive")
                 continue
             break
         except ValueError:
@@ -1177,17 +1569,34 @@ def get_user_config() -> Config:
         equilibration_temp_steps=equilibration_temp_steps,
         equilibration_final_steps=equilibration_final_steps,
         production_steps=production_steps,
-        traj_name=traj_name
+        traj_name=traj_name,
+        material_type=material_type,
+        species_a=species_a,
+        species_b=species_b,
+        position=position,
+        mix_ratio=mix_ratio
     )
     
     # Display configuration summary
     logger.info("\n" + "=" * 70)
     logger.info("⚙️  CONFIGURATION SUMMARY")
     logger.info("=" * 70)
+    logger.info(f"  Material type              : {material_type}")
+    if material_type == "mix":
+        logger.info(f"  Position                   : {position}")
+        if position == 'A':
+            logger.info(f"  Species (A mix)            : {species_a}")
+            logger.info(f"  Species (B pure)           : {species_b}")
+        else:
+            logger.info(f"  Species (A pure)           : {species_a}")
+            logger.info(f"  Species (B mix)            : {species_b}")
+        logger.info(f"  Mix ratio                  : {mix_ratio}")
+    else:
+        logger.info(f"  Species A site             : {species_a}")
+        logger.info(f"  Species B site             : {species_b}")
     logger.info(f"  Model file                 : {config.model_file}")
     logger.info(f"  Supercell dims             : {config.supercell_dims}")
     logger.info(f"  Symmetry                   : {config.symmetry}")
-    logger.info(f"  Output filename            : {config.output_filename}")
     logger.info(f"  Temperatures [K]           : {config.t_array}")
     logger.info(f"  T-stat damping             : {config.t_stat} fs")
     logger.info(f"  P-stat damping             : {config.p_stat} fs")
@@ -1221,47 +1630,75 @@ def main() -> None:
         # Extract model name
         model_name = model.header[0] if hasattr(model, 'header') and model.header else "Unknown"
         logger.info(f"Loaded model: {model_name}")
+
+        # ---- Validate user-specified species against the potential file ----
+        user_species: set = set()
+        for field_val in (config.species_a, config.species_b):
+            if field_val:
+                for sp in field_val.split('/'):
+                    sp = sp.strip()
+                    if sp:
+                        user_species.add(sp)
+
+        model_charge_species = (
+            {charge.species for charge in model.charges}
+            if hasattr(model, 'charges') else set()
+        )
+        missing_species = user_species - model_charge_species
+        if missing_species:
+            for sp in sorted(missing_species):
+                logger.warning(
+                    f"\u26a0\ufe0f  Species '{sp}' entered by user was NOT found in the potential "
+                    f"pickle file. It will lack shell-model parameters (charge, spring constants). "
+                    f"Species available in the model: {sorted(model_charge_species)}"
+                )
+        else:
+            logger.info(
+                f"\u2713 All user-specified species {sorted(user_species)} are present in the model."
+            )
         
         # Create supercell
         cell = create_supercell(
             model,
             config.supercell_dims,
-            config.symmetry
+            config.symmetry,
+            config.material_type,
+            config.species_a,
+            config.species_b,
+            config.position,
+            config.mix_ratio
         )
         logger.info(f"✓ Created supercell with dimensions {config.supercell_dims}")
         
-        # Process shell model and generate LAMMPS structure
-        mapped_cell, string_cell = process_shell_model(
-            model,
-            cell,
-            config.output_filename
-        )
-        
-        # Rename the structure file to rstrt.dat
+        # Process shell model with user-specified species
+        (
+            mapped_cell, string_cell,
+            shell_models_data, shell_models_springs,
+            shell_models_potentials, species_id_map,
+        ) = process_shell_model(model, cell, config.output_filename, 
+                               config.species_a, config.species_b)
+
+        # Rename structure file
         structure_file = f"{config.output_filename}.LAMMPSStructure"
         rstrt_file = 'rstrt.dat'
-        
+
         if os.path.exists(structure_file):
-            # Warn if rstrt.dat already exists
             if os.path.exists(rstrt_file):
                 logger.warning(f"⚠️  File '{rstrt_file}' already exists - OVERWRITING")
-            
             try:
                 subprocess.run(['mv', structure_file, rstrt_file], check=True)
                 logger.info(f"✓ Renamed '{structure_file}' to '{rstrt_file}'")
             except subprocess.CalledProcessError as e:
-                logger.warning(f"Error renaming structure file: {e}")
-                logger.info("  → Attempting alternative rename method...")
+                logger.warning(f"Error renaming file: {e}")
                 try:
                     os.rename(structure_file, rstrt_file)
                     logger.info(f"  ✓ Successfully renamed using os.rename()")
                 except OSError as e2:
                     logger.error(f"  ✗ Failed to rename file: {e2}")
         else:
-            logger.warning(f"⚠️  Structure file '{structure_file}' not found, skipping rename")
-        
-        # Create and save species_id_map
-        species_id_map = create_species_id_map(cell, model)
+            logger.warning(f"⚠️  Structure file '{structure_file}' not found")
+
+        # Save species ID map
         map_filename = "species_id_map.txt"
         try:
             with open(map_filename, "w") as f:
@@ -1270,9 +1707,8 @@ def main() -> None:
             logger.info(f"✓ Species ID map saved to {map_filename}")
         except IOError as e:
             logger.error(f"Failed to save species ID map: {e}")
-        
-        # Generate LAMMPS input
-        shell_models_data, shell_models_springs, shell_models_potentials = extract_shell_model_data(model)
+
+        # Generate and save LAMMPS input
         lammps_content = generate_lammps_input(
             shell_models_data,
             shell_models_springs,
@@ -1289,8 +1725,7 @@ def main() -> None:
             config.production_steps,
             config.traj_name
         )
-        
-        # Save to file
+
         save_lammps_input(lammps_content)
         
         logger.info("\n" + "=" * 70)
@@ -1301,6 +1736,7 @@ def main() -> None:
         logger.info("  ✓ lammps.in              (LAMMPS input script)")
         logger.info("  ✓ species_id_map.txt     (Species ID mapping)")
         logger.info("  ✓ lammps_processing.log  (Detailed processing log)")
+        logger.info("  ✓ supercell_structure.poscar  (Supercell structure)")
         logger.info("\n" + "=" * 70 + "\n")
         
     except ConfigurationError as e:

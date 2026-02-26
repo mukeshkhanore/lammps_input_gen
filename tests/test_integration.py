@@ -65,7 +65,10 @@ class TestConfigurationWorkflow:
             symmetry="cubic",
             t_array=[50.0, 100.0],
             t_stat=0.2,
-            p_stat=1.5
+            p_stat=1.5,
+            material_type="pure",
+            species_a="Sr",
+            species_b="Ti"
         )
         
         # Validation should pass
