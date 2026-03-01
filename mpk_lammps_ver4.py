@@ -6,10 +6,10 @@ This script processes shell models for LAMMPS structure and setup file generatio
 Mass ratio is set to 98% for core and 2% for shell.
 
 Author: Mukesh Khanore
-Date: 26-Feb-2026
-Note: Mix is implemented for file and cubic modes; random mode is still work in progress
+Date: 01-03-2026
+Note: missing species from model implemented, random is still pending.
 LAMMPS MD Logic: Mónica Elisabet Graf and Mauro António Pereira Gonçalves
-Version: 4.3 - Fixed shell preservation in cubic/random modes; proper FILE mode handling
+Version: 4.4 - Fixed shell preservation in cubic/random modes; proper FILE mode handling
 """
 
 import sys
@@ -30,6 +30,7 @@ current_time = datetime.now()
 time_str = current_time.strftime("%H%M%S")
 seed = int(time_str)
 
+
 # ============================================================================
 # CONSTANTS
 # ============================================================================
@@ -38,12 +39,12 @@ SHELL_MASS_RATIO = 0.02
 DEFAULT_RMAX = 10.0
 NEIGHBOR_DISTANCE = 1.0
 PRECISION_DECIMALS = 4
-DEFAULT_SUPERCELL_DIMS = [8, 8, 8]
+DEFAULT_SUPERCELL_DIMS = [2, 2, 2]
 DEFAULT_TEMPERATURE = 10.0
 DEFAULT_RANDOM_SEED = seed
 DEFAULT_T_STAT = 0.1
 DEFAULT_P_STAT = 2.0
-DEFAULT_SYMMETRY = "file"
+DEFAULT_SYMMETRY = "cubic"#"file"
 DEFAULT_MODEL_FILE = "./potential.pickle"
 DEFAULT_OUTPUT_FILE = "structure"
 
@@ -420,13 +421,16 @@ def create_species_id_map(cell: Any, model: Any, species_a: Optional[str] = None
             # Validate that all user-specified species exist in model.charges
             if hasattr(model, 'charges') and model.charges:
                 available_species = {charge.species for charge in model.charges}
-                for sp in species_list:
-                    if sp != "O" and sp not in available_species:
-                        logger.warning(
-                            f"⚠️  Species '{sp}' specified by user not found in model.charges. "
-                            f"It will have None for charge and spring constants. "
-                            f"Available species: {sorted(available_species)}"
-                        )
+                missing_from_model = [sp for sp in species_list if sp != "O" and sp not in available_species]
+                if missing_from_model:
+                    logger.warning(
+                        f"⚠️  The following user-specified species are NOT found in the model "
+                        f"potential data: {missing_from_model}. "
+                        f"These species will have charge=None and mass=None — they will be "
+                        f"EXCLUDED from LAMMPS charge-set and bond sections. "
+                        f"Species available in the model: {sorted(available_species)}. "
+                        f"If this is unintended, re-run with a species from the available list."
+                    )
         else:
             # Fall back to model defaults (backward compatible)
             source_description = "model.AB_specie (backward compatible fallback)"
@@ -452,6 +456,70 @@ def create_species_id_map(cell: Any, model: Any, species_a: Optional[str] = None
         
     except (AttributeError, KeyError) as e:
         raise ValidationError(f"Failed to create species ID map: {e}")
+
+def revise_species_id_map(species_id_map: Dict, model: Any) -> Dict:
+    """
+    Revise the species ID map so it only contains species that actually exist
+    in the model potential data (model.charges).
+
+    This is the user-suggested fix for the case where a user specifies a
+    species that is not in the model:
+      1. Compare every species in species_id_map against model.charges.
+      2. Warn clearly about any species NOT found in the model.
+      3. Rebuild a clean, sequential ID map containing only valid species,
+         preserving the original ABO ordering.
+
+    Args:
+        species_id_map: Original map from (species, part) -> integer ID,
+            as returned by create_species_id_map.
+        model: Model object with a .charges attribute.
+
+    Returns:
+        Dict: Revised map from (species, part) -> integer ID containing only
+              species that are present in model.charges. IDs are reassigned
+              sequentially so there are no gaps.
+    """
+    # Build set of species known to the model
+    if hasattr(model, 'charges') and model.charges:
+        model_species = {charge.species for charge in model.charges}
+    else:
+        model_species = set()
+
+    # Determine which user species are valid and which are missing
+    user_species_ordered = []  # preserve ABO order
+    for (sp, part), _ in sorted(species_id_map.items(), key=lambda x: x[1]):
+        if part == 'core' and sp not in user_species_ordered:
+            user_species_ordered.append(sp)
+
+    missing = [sp for sp in user_species_ordered if sp != 'O' and sp not in model_species]
+    valid = [sp for sp in user_species_ordered if sp not in missing]
+
+    if missing:
+        logger.warning(
+            f"⚠️  revise_species_id_map: The following user-specified species are NOT in the "
+            f"model potential file and will be REMOVED from the ID map: {missing}. "
+            f"They will NOT appear in the LAMMPS structure or setup file. "
+            f"Species present in the model: {sorted(model_species)}."
+        )
+    else:
+        logger.info(
+            f"✓ revise_species_id_map: All user-specified species {valid} are valid "
+            f"(found in model.charges). No changes to the ID map."
+        )
+
+    # Rebuild a clean sequential map for valid species only
+    revised_map: Dict = {}
+    n = len(valid)
+    for i, sp in enumerate(valid):
+        revised_map[(sp, 'core')]  = i + 1
+        revised_map[(sp, 'shell')] = n + i + 1
+
+    logger.info(
+        f"✓ Revised species ID map: {len(valid)} valid species → "
+        f"{len(revised_map)} entries. {revised_map}"
+    )
+    return revised_map
+
 
 # ============================================================================
 # CELL CREATION AND MANIPULATION
@@ -508,6 +576,14 @@ def create_mapped_cell(original_cell: Any, species_id_map: Dict) -> Any:
     for species_name in species_order:
         cores = cores_by_species.get(species_name, [])
         shells = shells_by_species.get(species_name, [])
+        
+        # Option B: warn if a species has no atoms in the cell at all
+        if not cores and not shells:
+            logger.warning(
+                f"⚠️  Species '{species_name}' is in species_id_map but has NO atoms in the cell. "
+                f"It may not be in the model data or has zero concentration. "
+                f"No atoms will be added for this species — its charge/mass entries will remain None."
+            )
         
         # Track which shells have been paired
         used_shell_indices = set()
@@ -591,77 +667,235 @@ def create_mapped_cell(original_cell: Any, species_id_map: Dict) -> Any:
     logger.info(f"✓ Created mapped cell with {new_cell.N} atoms (ABO order, core followed by its shell)")
     return new_cell
 
-def initialize_shell_models_data(cell: Any) -> Dict:
+def initialize_shell_models_data(cell: Any, species_id_map: Optional[Dict] = None) -> Dict:
     """
     Initialize new shell models data structure with default values.
-    
+
+    Each integer species ID represents exactly ONE part (core OR shell).
+    When species_id_map is provided, the dict is built **entirely from the map
+    values** so it is always consistent with the revised ID map — we do NOT
+    rely on cell.species_name, which can differ depending on pm__cell internals.
+
+    Both charge and mass are initialised to None so that validate_shell_model_data
+    can detect any un-mapped entry (a leftover None after map_charges_to_new_model
+    means something went wrong and the entry should be excluded).
+
     Args:
-        cell: Cell object with species information
-        
+        cell: Cell object (kept for backward compatibility, not used when
+              species_id_map is provided)
+        species_id_map: Mapping (species, part) -> integer ID from revise_species_id_map.
+              When supplied, this is the single source of truth for which IDs exist.
+
     Returns:
-        Dict: Initialized shell models data
+        Dict: Initialized shell models data keyed by integer ID
     """
     shell_models_data = {'model': {}}
-    for species in cell.species_name:
-        shell_models_data['model'][species] = {
-            'core': {"mass": 0.0, "charge": None},
-            'shell': {"mass": 0.0, "charge": None}
+
+#    if species_id_map:
+#        # Build from species_id_map — guaranteed to match the revised IDs
+#        for (species, part), mapped_id in species_id_map.items():
+#            if mapped_id not in shell_models_data['model']:
+#                shell_models_data['model'][mapped_id] = {}
+#            # Each ID gets only the sub-dict for its actual part (core OR shell)
+#            shell_models_data['model'][mapped_id][part] = {"mass": None, "charge": None}
+#
+#        logger.debug(
+#            f"Initialized shell models data from species_id_map: "
+#            f"{len(shell_models_data['model'])} IDs → {list(shell_models_data['model'].keys())}"
+#        )
+#    else:
+#        # Backward-compatible fallback: use cell.species_name
+    for species_id in cell.species_name:
+        shell_models_data['model'][species_id] = {
+            'core': {"mass": None, "charge": None},
+            'shell': {"mass": None, "charge": None}
         }
-    
-    logger.debug(f"Initialized shell models data for {len(cell.species_name)} species")
+    logger.debug(
+        f"Initialized shell models data (legacy fallback) for "
+        f"{len(cell.species_name)} IDs from cell.species_name"
+    )
+
     return shell_models_data
 
-def map_charges_to_new_model(shell_models_data: Dict, species_id_map: Dict, 
-                              shell_models_data_new: Dict) -> Dict:
+
+
+def _get_default_species_data(species: str, part: str, shell_models_data: Dict, 
+                               is_user_provided: bool = False) -> Optional[Tuple[float, bool]]:
     """
-    Map charges from original model to new model.
+    Get charge for a species and part (core/shell), handling both model and user-provided species.
+    
+    For species found in shell_models_data (extracted from model.charges):
+      - Returns charge from model data and confirms species is from model
+      - Logs at DEBUG level
+    
+    For user-provided species missing from model:
+      - Returns default charge (0.0) and marks as user-provided
+      - Logs at INFO level with clear warning
     
     Args:
-        shell_models_data: Original shell models data
-        species_id_map: Mapping from (species, part) to numeric ID
-        shell_models_data_new: New shell models data structure
+        species: Species element symbol (e.g., "Ba", "Ti", "O")
+        part: Part type ("core" or "shell")
+        shell_models_data: Original shell models data keyed by species name
+            e.g. {'model': {'Ba': {'core': {...}, 'shell': {...}}, ...}}
+        is_user_provided: Whether this species came from user input
         
     Returns:
-        Dict: Updated shell models data with mapped charges
-        
-    Raises:
-        ValidationError: If species data is missing or invalid
+        Tuple[float, bool]: (charge_value, is_from_model) where:
+            - charge_value: charge to use (from model or default 0.0)
+            - is_from_model: True if from model, False if user-provided default
+            
+        Returns None if species can't be processed.
     """
-    for species in shell_models_data['model']:
+    # Check if species exists in shell_models_data (extracted from model)
+    if species in shell_models_data['model']:
+        if part in shell_models_data['model'][species]:
+            charge = shell_models_data['model'][species][part]['charge']
+            logger.debug(f"Species '{species}' {part} found in model data → charge={charge}")
+            return (charge, True)  # From model
+    
+    # Species not in model
+    if is_user_provided:
+        logger.info(
+            f"⚠️  User-provided species '{species}' NOT found in model.charges → "
+            f"using DEFAULT charge=0.0. Mass will be calculated from atomic weight."
+        )
+        return (0.0, False)  # User-provided, use default charge
+    else:
+        logger.warning(
+            f"⚠️  Species '{species}' not found in model → using DEFAULT charge=0.0"
+        )
+        return (0.0, False)
+    
+    return None
+
+
+def map_charges_to_new_model(shell_models_data: Dict, species_id_map: Dict,
+                              shell_models_data_new: Dict,
+                              id_list: Optional[Dict] = None,
+                              user_species_set: Optional[set] = None) -> Dict:
+    """
+    Map charges and masses from the original model data to the new integer-keyed model.
+    
+    Supports two species sources:
+      - Model species: charge from model.charges, mass from mendeleev
+      - User-provided species: default charge (0.0), mass from mendeleev
+
+    Args:
+        shell_models_data: Original shell models data keyed by element symbol
+            e.g. {'model': {'Ba': {'core': {...}, 'shell': {...}}, ...}}
+        species_id_map: Mapping (species, part) -> integer ID
+        shell_models_data_new: New shell models data initialised by
+            initialize_shell_models_data, keyed by integer ID
+        id_list: Optional pre-built lookup ``{species: {'core': id, 'shell': id}}``.
+            When supplied, the function uses direct species-name comparisons
+            instead of scanning species_id_map for every species (faster and
+            easier to reason about).  Build it with::
+
+                id_list = {}
+                for (sp, part), mid in species_id_map.items():
+                    id_list.setdefault(sp, {})[part] = mid
+
+            If None, the old scan-based approach is used (backward compatible).
+        
+        user_species_set: Optional set of species that came from user input (species_a, species_b).
+            When supplied, species in this set but missing from model will use default
+            charge (0.0) instead of being skipped. Default None (backward compatible).
+
+    Returns:
+        Dict: Updated shell_models_data_new with mapped charges and masses
+    """
+    # Default to empty set if not provided
+    if user_species_set is None:
+        user_species_set = set()
+    # Build id_list from species_id_map if not supplied by caller
+    if id_list is None:
+        id_list = {}
+        for (sp, part), mid in species_id_map.items():
+            id_list.setdefault(sp, {})[part] = mid
+        logger.debug("map_charges_to_new_model: built id_list from species_id_map internally")
+
+    # Track which species came from model vs. user-provided
+    model_sources_summary = {'from_model': [], 'from_user': []}
+
+    for species in id_list.keys():  # Iterate over all species in the ID map
+        # Option B: get atomic weight; warn and skip if impossible
         try:
             species_mass = element(species).atomic_weight
             logger.debug(f"Processing species: {species} with atomic weight: {species_mass}")
         except (ValueError, AttributeError, KeyError) as e:
-            raise ValidationError(f"Failed to get atomic weight for species '{species}': {e}") from e
-        
-        for id_key, mapped_id in species_id_map.items():
-            if id_key[0] == species:
-                part = id_key[1]
-                
-                # Validate key existence before access
-                if species not in shell_models_data.get('model', {}):
-                    raise ValidationError(f"Species '{species}' not found in shell model data")
-                if part not in shell_models_data['model'][species]:
-                    raise ValidationError(f"Part '{part}' not found for species '{species}'")
-                
-                if mapped_id not in shell_models_data_new['model']:
-                    logger.warning(f"Mapped ID {mapped_id} not in new model, skipping")
-                    continue
-                
-                # Map charge
-                shell_models_data_new['model'][mapped_id][part]['charge'] = \
-                    shell_models_data['model'][species][part]['charge']
-                
-                # Calculate mass based on part
-                if part == 'core':
-                    mass = np.round(species_mass * CORE_MASS_RATIO, PRECISION_DECIMALS)
+            logger.warning(
+                f"⚠️  Could not retrieve atomic weight for species '{species}' "
+                f"(mendeleev error: {e}). Charge and mass will remain None. "
+                f"It will be EXCLUDED from LAMMPS charge-set and bond sections."
+            )
+            continue
+
+        # Determine if species is user-provided or from model
+        is_user_provided = species in user_species_set
+        species_source_tracked = False
+
+        # Use direct species-name comparison via id_list
+        parts_for_species = id_list[species]  # e.g. {'core': 1, 'shell': 4}
+
+        for part, mapped_id in parts_for_species.items():
+            # Get charge: from model or default (now part-aware - gets core vs shell charge correctly)
+            charge_result = _get_default_species_data(species, part, shell_models_data, is_user_provided)
+            if charge_result is None:
+                logger.warning(f"Could not determine charge for species '{species}' {part}, skipping")
+                continue
+            
+            charge, is_from_model = charge_result
+
+            # Track source (only once per species)
+            if not species_source_tracked:
+                if is_from_model:
+                    model_sources_summary['from_model'].append(species)
                 else:
-                    mass = np.round(species_mass * SHELL_MASS_RATIO, PRECISION_DECIMALS)
-                
-                shell_models_data_new['model'][mapped_id][part]['mass'] = mass
+                    model_sources_summary['from_user'].append(species)
+                species_source_tracked = True
+            
+            # Verify the target slot exists in the new model
+            if mapped_id not in shell_models_data_new['model']:
+                logger.warning(
+                    f"⚠️  Mapped ID {mapped_id} (species={species}, part={part}) not found "
+                    f"in new model dict. Skipping."
+                )
+                continue
+
+            # Assign charge (from model or default)
+            shell_models_data_new['model'][mapped_id][part]['charge'] = charge
+
+            # Calculate and assign mass
+            if part == 'core':
+                mass = np.round(species_mass * CORE_MASS_RATIO, PRECISION_DECIMALS)
+            else:
+                mass = np.round(species_mass * SHELL_MASS_RATIO, PRECISION_DECIMALS)
+
+            shell_models_data_new['model'][mapped_id][part]['mass'] = mass
+            
+            # Log with source information
+            source_label = "model" if is_from_model else "user-provided (default)"
+            logger.debug(
+                f"  ✓ {species} {part} [{source_label}]: charge={charge}, "
+                f"mass={mass} → ID {mapped_id}"
+            )
+
+    # Log summary
+    if model_sources_summary['from_model']:
+        logger.info(
+            f"✓ Species from model ({len(model_sources_summary['from_model'])}): "
+            f"{model_sources_summary['from_model']} → using charge from model"
+        )
+    
+    if model_sources_summary['from_user']:
+        logger.info(
+            f"✓ User-provided species ({len(model_sources_summary['from_user'])}): "
+            f"{model_sources_summary['from_user']} → using default charge=0.0"
+        )
     
     logger.info("✓ Successfully mapped charges and masses to new model")
     return shell_models_data_new
+
 
 def validate_shell_model_data(shell_models_data: Dict) -> Dict:
     """
@@ -679,34 +913,46 @@ def validate_shell_model_data(shell_models_data: Dict) -> Dict:
             if any(value is None for value in attributes.values()):
                 for attr_name in attributes:
                     attributes[attr_name] = None
-                logger.debug(f"Species {species_id} {part} has incomplete data, set to None")
+                # Option B: emit a clear WARNING so user sees which species/part is missing data
+                logger.warning(
+                    f"⚠️  Species ID '{species_id}' [{part}] has incomplete model parameters "
+                    f"(charge or mass is None). This species was likely not found in the model "
+                    f"potential file. It will be EXCLUDED from LAMMPS charge-set and bond "
+                    f"sections. Check the warnings above for which user-specified species is missing."
+                )
     
     return shell_models_data
 
 def create_string_named_cell(numeric_cell: Any) -> Any:
     """
     Create a cell with string atom names instead of numeric IDs.
-    
+
+    Note: shell_models['model'] keys are kept as integers because
+    pm__cell.writeToLAMMPSStructure accesses them via integer index [ii+1].
+
     Args:
         numeric_cell: Cell with numeric IDs
-        
+
     Returns:
         Any: Cell with string atom names
     """
     string_cell = pmc.Cell(convention='zerolist', prescribe_N=0)
     string_cell.lattice = copy.deepcopy(numeric_cell.lattice)
-    
+
     for atom in numeric_cell.atom:
         string_cell.appendAtom(
             name=str(atom.name),
             position_frac=atom.position_frac,
             coreshell=atom.coreshell
         )
-    
+
+    # Keep integer keys — pm__cell.writeToLAMMPSStructure accesses
+    # shell_models['model'] via integer index (ii+1), not by atom name.
     string_cell.shell_models = copy.deepcopy(numeric_cell.shell_models)
+
     logger.debug(f"Created string-named cell with {string_cell.N} atoms")
-    
     return string_cell
+
 
 
 # ============================================================================
@@ -764,99 +1010,155 @@ def create_supercell(model: Any, supercell_dims: List[int], symmetry: str = "cub
             raise LAMMPSProcessingError(f"Error processing GULP file '{gulp_file}': {e}") from e
     
     else:
-        # Validate model has required chemical order information
-        if not hasattr(model, 'chemical_order'):
-            raise ValidationError("Model missing chemical_order attribute")
-        
-        if "A" not in model.chemical_order or "B" not in model.chemical_order:
-            raise ValidationError("Model chemical_order must contain both 'A' and 'B' sites")
-        
-        try:
-            chemical_order_A = pmco.ChemicalOrder(model.chemical_order["A"]["configuration"])
-            chemical_order_B = pmco.ChemicalOrder(model.chemical_order["B"]["configuration"])
-        except Exception as e:
-            raise ValidationError(f"Failed to create chemical order: {e}")
-        
-        # Determine species to use: user-provided or model's default (backward compatible)
-        # IMPORTANT: prescribeChemicalOrderForBox() expects a list format, not string
-        if species_a is None:
-            if not hasattr(model, 'AB_specie') or "A" not in model.AB_specie:
-                raise ValidationError("No species_a provided and model.AB_specie['A'] not found")
-            replacements_a = model.AB_specie["A"]  # Already a list from model
-            logger.debug(f"Using species from model for A-site: {replacements_a}")
-        else:
-            # Parse user input string into list format that prescribeChemicalOrderForBox() expects
-            if '/' in species_a:
-                replacements_a = [s.strip() for s in species_a.split('/')]
+        if material_type == "mix":
+            # Validate model has required chemical order information
+            if not hasattr(model, 'chemical_order'):
+                raise ValidationError("Model missing chemical_order attribute")
+
+            if "A" not in model.chemical_order or "B" not in model.chemical_order:
+                raise ValidationError("Model chemical_order must contain both 'A' and 'B' sites")
+
+            try:
+                chemical_order_A = pmco.ChemicalOrder(model.chemical_order["A"]["configuration"])
+                chemical_order_B = pmco.ChemicalOrder(model.chemical_order["B"]["configuration"])
+            except Exception as e:
+                raise ValidationError(f"Failed to create chemical order: {e}")
+
+            # Determine species to use: user-provided or model's default (backward compatible)
+            # IMPORTANT: prescribeChemicalOrderForBox() expects a list format, not string
+            if species_a is None:
+                if not hasattr(model, 'AB_specie') or "A" not in model.AB_specie:
+                    raise ValidationError("No species_a provided and model.AB_specie['A'] not found")
+                replacements_a = model.AB_specie["A"]  # Already a list from model
+                logger.debug(f"Using species from model for A-site: {replacements_a}")
             else:
-                replacements_a = [species_a.strip()]
-            logger.info(f"Using user-specified species for A-site: {replacements_a}")
-        
-        if species_b is None:
-            if not hasattr(model, 'AB_specie') or "B" not in model.AB_specie:
-                raise ValidationError("No species_b provided and model.AB_specie['B'] not found")
-            replacements_b = model.AB_specie["B"]  # Already a list from model
-            logger.debug(f"Using species from model for B-site: {replacements_b}")
-        else:
-            # Parse user input string into list format that prescribeChemicalOrderForBox() expects
-            if '/' in species_b:
-                replacements_b = [s.strip() for s in species_b.split('/')]
+                # Parse user input string into list format that prescribeChemicalOrderForBox() expects
+                if '/' in species_a:
+                    replacements_a = [s.strip() for s in species_a.split('/')]
+                else:
+                    replacements_a = [species_a.strip()]
+                logger.info(f"Using user-specified species for A-site: {replacements_a}")
+
+            if species_b is None:
+                if not hasattr(model, 'AB_specie') or "B" not in model.AB_specie:
+                    raise ValidationError("No species_b provided and model.AB_specie['B'] not found")
+                replacements_b = model.AB_specie["B"]  # Already a list from model
+                logger.debug(f"Using species from model for B-site: {replacements_b}")
             else:
-                replacements_b = [species_b.strip()]
-            logger.info(f"Using user-specified species for B-site: {replacements_b}")
-        
-        # Validate that custom species exist in model charges
-        if not hasattr(model, 'charges') or not model.charges:
-            raise ValidationError("Model has no charge information to validate species")
-        
-        available_species = {charge.species for charge in model.charges}
-        
-        # Validate species_a (can be single like "Ba" or mixed like "Ba/Ca")
-        if species_a is not None:
-            species_a_list = [s.strip() for s in species_a.split('/')]
-            for sp in species_a_list:
-                if sp not in available_species:
-                    raise ValidationError(
-                        f"Custom species '{sp}' (from species_a='{species_a}') not found in model. "
-                        f"Available species: {sorted(list(available_species))}"
-                    )
-        
-        # Validate species_b (can be single like "Ti" or mixed like "Zr/Sn")
-        if species_b is not None:
-            species_b_list = [s.strip() for s in species_b.split('/')]
-            for sp in species_b_list:
-                if sp not in available_species:
-                    raise ValidationError(
-                        f"Custom species '{sp}' (from species_b='{species_b}') not found in model. "
-                        f"Available species: {sorted(list(available_species))}"
-                    )
-        
-        # Prepare structure
-        cell = pmc.Cell(convention='zerolist', prescribe_N=0)
-        cell.is_shell_model = True
-        cell.simplePerovskite(ABO_names=["A", "B", "O"], dimensions=[nx, ny, nz], coreshell=True)
-        
-        # Apply chemical order with selected species
-        try:
-            cell = chemical_order_A.prescribeChemicalOrderForBox(
-                cell, position="A", replacements=replacements_a, 
-                dimensions=[nx, ny, nz], coreshell=True
-            )
-            cell = chemical_order_B.prescribeChemicalOrderForBox(
-                cell, position="B", replacements=replacements_b, 
-                dimensions=[nx, ny, nz], coreshell=True
-            )
-            cell.pairCoresShells()
-        except (AttributeError, ValueError, TypeError, KeyError) as e:
-            raise LAMMPSProcessingError(f"Failed to apply chemical order: {e}") from e
-        
-        # Apply perturbation for random symmetry
-        perturbation = np.zeros((cell.N, 3))
-        if symmetry == "random":
-            logger.info("Applying random perturbations to atomic positions")
-            for i in range(cell.N):
-                perturbation[i] = np.random.uniform(-0.05, 0.05, 3)
-        
+                # Parse user input string into list format that prescribeChemicalOrderForBox() expects
+                if '/' in species_b:
+                    replacements_b = [s.strip() for s in species_b.split('/')]
+                else:
+                    replacements_b = [species_b.strip()]
+                logger.info(f"Using user-specified species for B-site: {replacements_b}")
+
+            # Validate that custom species exist in model charges
+            if not hasattr(model, 'charges') or not model.charges:
+                raise ValidationError("Model has no charge information to validate species")
+
+            available_species = {charge.species for charge in model.charges}
+
+            # Validate species_a (can be single like "Ba" or mixed like "Ba/Ca")
+            if species_a is not None:
+                species_a_list = [s.strip() for s in species_a.split('/')]
+                for sp in species_a_list:
+                    if sp not in available_species:
+                        raise ValidationError(
+                            f"Custom species '{sp}' (from species_a='{species_a}') not found in model. "
+                            f"Available species: {sorted(list(available_species))}"
+                        )
+
+            # Validate species_b (can be single like "Ti" or mixed like "Zr/Sn")
+            if species_b is not None:
+                species_b_list = [s.strip() for s in species_b.split('/')]
+                for sp in species_b_list:
+                    if sp not in available_species:
+                        raise ValidationError(
+                            f"Custom species '{sp}' (from species_b='{species_b}') not found in model. "
+                            f"Available species: {sorted(list(available_species))}"
+                        )
+
+            # Prepare structure
+            cell = pmc.Cell(convention='zerolist', prescribe_N=0)
+            cell.is_shell_model = True
+            cell.simplePerovskite(ABO_names=["A", "B", "O"], dimensions=[nx, ny, nz], coreshell=True)
+
+            # Apply chemical order with selected species
+            try:
+                cell = chemical_order_A.prescribeChemicalOrderForBox(
+                    cell, position="A", replacements=replacements_a, 
+                    dimensions=[nx, ny, nz], coreshell=True
+                )
+                cell = chemical_order_B.prescribeChemicalOrderForBox(
+                    cell, position="B", replacements=replacements_b, 
+                    dimensions=[nx, ny, nz], coreshell=True
+                )
+                cell.pairCoresShells()
+            except (AttributeError, ValueError, TypeError, KeyError) as e:
+                raise LAMMPSProcessingError(f"Failed to apply chemical order: {e}") from e
+
+            # Apply perturbation for random symmetry
+            perturbation = np.zeros((cell.N, 3))
+            if symmetry == "random":
+                logger.info("Applying random perturbations to atomic positions")
+                for i in range(cell.N):
+                    perturbation[i] = np.random.uniform(-0.05, 0.05, 3)
+                cell.perturb(perturbation)            
+        else:
+            # Validate that species_a and species_b match model's available species
+            if not hasattr(model, 'AB_specie') or "A" not in model.AB_specie or "B" not in model.AB_specie:
+                raise ValidationError("Model missing AB_specie with both 'A' and 'B' sites")
+            
+            model_species_a = model.AB_specie.get("A", [])
+            model_species_b = model.AB_specie.get("B", [])
+            
+            # Parse user-specified species
+            user_species_a = [s.strip() for s in species_a.split('/')] if species_a else []
+            user_species_b = [s.strip() for s in species_b.split('/')] if species_b else []
+            
+            # Validate A-site species against model.AB_specie AND model.charges
+            # Option B: warn for both mismatch types, do not raise
+            if hasattr(model, 'charges') and model.charges:
+                available_in_charges = {charge.species for charge in model.charges}
+            else:
+                available_in_charges = set()
+            
+            missing_a = [sp for sp in user_species_a if sp and sp not in available_in_charges]
+            missing_b = [sp for sp in user_species_b if sp and sp not in available_in_charges]
+            
+            if missing_a:
+                logger.warning(
+                    f"⚠️  The following A-site species are NOT found in the model potential data: "
+                    f"{missing_a}. They will have charge=None and mass=None — they will be EXCLUDED "
+                    f"from LAMMPS charge-set and bond sections. "
+                    f"Species available in the model: {sorted(available_in_charges)}."
+                )
+            
+            if missing_b:
+                logger.warning(
+                    f"⚠️  The following B-site species are NOT found in the model potential data: "
+                    f"{missing_b}. They will have charge=None and mass=None — they will be EXCLUDED "
+                    f"from LAMMPS charge-set and bond sections. "
+                    f"Species available in the model: {sorted(available_in_charges)}."
+                )
+            
+            if not hasattr(model, 'chemical_order'):
+                raise ValidationError("Model missing chemical_order attribute")
+
+            if "A" not in model.chemical_order or "B" not in model.chemical_order:
+                raise ValidationError("Model chemical_order must contain both 'A' and 'B' sites")
+
+            cell = pmc.Cell(convention='zerolist', prescribe_N=0)
+            cell.is_shell_model = True
+            cell.simplePerovskite(ABO_names=[species_a, species_b, "O"], dimensions=[nx, ny, nz], coreshell=True)
+            
+            # For pure mode: set replacements for species ordering (single species per site)
+            replacements_a = species_a
+            replacements_b = species_b
+            
+            # No perturbation for pure mode
+            perturbation = np.zeros((cell.N, 3))
+
         # Order species in ABO order: all A-site species, then all B-site species, then oxygen (like gs.gulp)
         species_order = []
         
@@ -886,8 +1188,7 @@ def create_supercell(model: Any, supercell_dims: List[int], symmetry: str = "cub
         
         # Finalize cell
         cell.countPresentSpecies()
-        cell.pairCoresShells()
-        cell.displaceCartesian(perturbation)
+        cell.pairCoresShells()        
         
         logger.info(f"✓ Created {symmetry} supercell with dimensions {supercell_dims}")
         logger.info(f"  Total atoms in supercell: {cell.N}")
@@ -897,10 +1198,54 @@ def create_supercell(model: Any, supercell_dims: List[int], symmetry: str = "cub
 # ============================================================================
 # SHELL MODEL PROCESSING
 # ============================================================================
+def _sanitize_shell_model_for_writing(string_cell: Any, default_charge: float = 0.0,
+                                      default_mass: float = 0.0) -> None:
+    """
+    Replace None charge/mass values in string_cell.shell_models with a numeric
+    default so that writeToLAMMPSStructure never crashes with a TypeError.
+
+    This is the Option-B fall-back: unknown species end up with charge=0.0
+    and mass=0.0 in the output file.  Warnings about which species are
+    affected have already been emitted earlier in the pipeline.
+
+    Args:
+        string_cell: Cell whose shell_models will be sanitized in-place
+        default_charge: Value to substitute for None charge (default 0.0)
+        default_mass:   Value to substitute for None mass   (default 0.0)
+    """
+    if not hasattr(string_cell, 'shell_models') or not isinstance(string_cell.shell_models, dict):
+        return
+
+    model_dict = string_cell.shell_models.get('model', {})
+    sanitized_ids = []
+
+    for species_id, parts in model_dict.items():
+        for part, attrs in parts.items():
+            changed = False
+            if attrs.get('charge') is None:
+                attrs['charge'] = default_charge
+                changed = True
+            if attrs.get('mass') is None:
+                attrs['mass'] = default_mass
+                changed = True
+            if changed:
+                sanitized_ids.append(f"{species_id}/{part}")
+
+    if sanitized_ids:
+        logger.info(
+            f"ℹ️  Replaced None charge/mass with {default_charge}/{default_mass} for "
+            f"species IDs (missing from model): {sanitized_ids}. "
+            f"These atoms will have zero charge and mass in the LAMMPS structure file."
+        )
+
 def process_shell_model(model: Any, cell: Any, output_filename: str = "structure", 
                         species_a: Optional[str] = None, species_b: Optional[str] = None) -> Tuple[Any, Any, Dict, Dict, List, Dict]:
     """
     Process shell model and save to LAMMPS structure.
+    
+    Supports both model and user-provided species:
+      - Model species: charge extracted from model.charges
+      - User-provided species missing from model: default charge=0.0, mass from mendeleev
     
     Args:
         model: Model containing charges information
@@ -922,21 +1267,44 @@ def process_shell_model(model: Any, cell: Any, output_filename: str = "structure
         LAMMPSProcessingError: If processing fails
     """
     try:
-        # Extract shell model data
+        # Extract shell model data from model
         shell_models_data, shell_models_springs, shell_models_potentials = extract_shell_model_data(model)
         
-        # Create species ID mapping using user-specified species (or fall back to model defaults)
+        logger.info(f"Extracted shell model data for {len(shell_models_data['model'])} species from model")
+
+        # Create initial species ID mapping (user-specified or model defaults)
         species_id_map = create_species_id_map(cell, model, species_a, species_b)
         
-        # Create new cell with mapped IDs
+        # Build set of user-provided species (specified by user in species_a or species_b)
+        user_species_set = set()
+        if species_a:
+            user_species_set.update([s.strip() for s in species_a.split('/')])
+        if species_b:
+            user_species_set.update([s.strip() for s in species_b.split('/')])
+        
+        if user_species_set:
+            logger.info(f"User-provided species identified: {user_species_set}")
+        else:
+            logger.info("No user-provided species (using model defaults)")
+        
+        # Create new cell with the mapped IDs
         mapped_cell = create_mapped_cell(cell, species_id_map)
         
-        # Initialize new shell models data
-        shell_models_data_new = initialize_shell_models_data(mapped_cell)
+        # Initialize new shell models data with None placeholders
+        shell_models_data_new = initialize_shell_models_data(mapped_cell, species_id_map)
         
-        # Map charges to new model
+        # Build id_list: {species_name: {part: integer_id}} for direct species lookups
+        id_list: Dict = {}
+        for (sp, part), mid in species_id_map.items():
+            id_list.setdefault(sp, {})[part] = mid
+        logger.debug(f"Built id_list for mapping: {id_list}")
+
+        # Map charges and masses to new model, passing user_species_set for source tracking
+        # This function will use model charges where available, and default charge (0.0)
+        # for user-provided species missing from the model
         shell_models_data_new = map_charges_to_new_model(
-            shell_models_data, species_id_map, shell_models_data_new
+            shell_models_data, species_id_map, shell_models_data_new, 
+            id_list=id_list, user_species_set=user_species_set
         )
         
         # Validate shell model data
@@ -1025,26 +1393,38 @@ fix csinfo all property/atom i_CSID
 read_data rstrt.dat fix csinfo NULL CS-Info
 """
 
-def generate_charge_settings(shell_models_data: Dict, species_id_map: Dict) -> str:
-    """Generate charge settings for each atom type."""
+def generate_charge_settings(cell: Any, species_id_map: Dict) -> str:
+    """Generate charge settings for each atom type, extracted from cell.shell_models.
+    
+    Args:
+        cell: Cell object containing shell_models with charge information
+        species_id_map: Mapping from (species, part) to integer type ID for comments
+        
+    Returns:
+        str: LAMMPS-formatted charge settings (set type commands)
+    """
     lines = []
-    charge_values = {}
     
-    for species, parts in shell_models_data['model'].items():
+    # Extract charge information directly from cell.shell_models
+    if not hasattr(cell, 'shell_models') or 'model' not in cell.shell_models:
+        logger.warning("Cell has no shell_models data; returning empty charge settings")
+        return ""
+    
+    # cell.shell_models['model'] is keyed by type_id (integer), not by species name
+    for type_id, parts in sorted(cell.shell_models['model'].items()):
         for part, params in parts.items():
-            key = (species, part)
-            if key in species_id_map and 'charge' in params and params['charge'] is not None:
-                type_id = species_id_map[key]
-                charge_values[type_id] = params['charge']
-    
-    for type_id, charge in sorted(charge_values.items()):
-        species_part = next((key for key, val in species_id_map.items() if val == type_id), None)
-        if species_part:
-            species, part = species_part
-            comment = f"#{species} {part}"
-        else:
-            comment = ""
-        lines.append(f"set type {type_id} charge {charge:.7f} {comment}")
+            if 'charge' in params and params['charge'] is not None:
+                charge = params['charge']
+                
+                # Reverse-map type_id back to (species, part) for comment generation
+                species_part = next((key for key, val in species_id_map.items() if val == type_id), None)
+                if species_part:
+                    species, mapped_part = species_part
+                    comment = f"#{species} {mapped_part}"
+                else:
+                    comment = ""
+                
+                lines.append(f"set type {type_id} charge {charge:.7f} {comment}")
     
     return "\n".join(lines)
 
@@ -1241,7 +1621,7 @@ undump myDump
     
     return "\n".join(lines)
 
-def generate_lammps_input(shell_models_data: Dict, shell_models_springs: Dict, 
+def generate_lammps_input(cell: Any, shell_models_springs: Dict, 
                            shell_models_potentials: List, species_id_map: Dict, 
                            model_name: str, t_array: List[float], t_stat: float, 
                            p_stat: float, thermo_freq: int, timestep: float,
@@ -1257,7 +1637,7 @@ def generate_lammps_input(shell_models_data: Dict, shell_models_springs: Dict,
         sections = [
             generate_lammps_header(model_name),
             "\n",
-            generate_charge_settings(shell_models_data, species_id_map),
+            generate_charge_settings(cell, species_id_map),
             generate_group_definitions(species_id_map),
             generate_potential_section(model_name, shell_models_potentials, species_id_map),
             generate_bond_section(shell_models_springs, species_id_map),
@@ -1710,7 +2090,7 @@ def main() -> None:
 
         # Generate and save LAMMPS input
         lammps_content = generate_lammps_input(
-            shell_models_data,
+            string_cell,
             shell_models_springs,
             shell_models_potentials,
             species_id_map,

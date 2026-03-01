@@ -18,8 +18,8 @@ class TestConfigClass:
         """Test creating config with default values."""
         config = Config()
         assert config.model_file == "./potential.pickle"
-        assert config.supercell_dims == [8, 8, 8]
-        assert config.symmetry == "file"
+        assert config.supercell_dims == [2, 2, 2]   # DEFAULT_SUPERCELL_DIMS = [2, 2, 2]
+        assert config.symmetry == "cubic"             # DEFAULT_SYMMETRY = "cubic"
         assert config.t_array == [10.0]
         assert config.t_stat == 0.1
         assert config.p_stat == 2.0

@@ -22,32 +22,44 @@ class TestEndToEndWorkflow:
     
     def test_load_and_generate_workflow(self, sample_pickle_file, temp_dir, mock_cell):
         """Test loading model and generating LAMMPS input."""
+        from unittest.mock import Mock
+
         # Load model
         model = load_model(sample_pickle_file)
         assert model is not None
-        
+
         # Extract shell model data
         shell_data, springs, potentials = extract_shell_model_data(model)
         assert len(shell_data['model']) > 0
-        
+
         # Create species ID map
         species_map = create_species_id_map(mock_cell, model)
         assert len(species_map) > 0
-        
+
+        # generate_lammps_input expects a *cell* object whose .shell_models
+        # is integer-keyed (as produced by process_shell_model). Build a
+        # minimal mock cell that satisfies this interface.
+        #   shell_data['model'] is species-name-keyed at this point;
+        #   for the integration test we only need charge settings to work,
+        #   so we attach the raw shell_data directly — the real pipeline
+        #   would use the integer-keyed version from initialize_shell_models_data.
+        mock_input_cell = Mock()
+        mock_input_cell.shell_models = shell_data
+
         # Generate LAMMPS input
         content = generate_lammps_input(
-            shell_data, springs, potentials, species_map,
+            mock_input_cell, springs, potentials, species_map,
             "Test Model", [100.0], 0.1, 2.0,
             500, 0.0002, 20000, 30000, 50000, "traj"
         )
         assert len(content) > 0
         assert "clear" in content
-        
+
         # Save to file
         output_file = os.path.join(temp_dir, "test_lammps.in")
         save_lammps_input(content, output_file)
         assert os.path.exists(output_file)
-        
+
         # Verify file contents
         with open(output_file, 'r') as f:
             saved = f.read()

@@ -4,6 +4,7 @@ Unit tests for LAMMPS input file generation.
 import pytest
 import sys
 import os
+from unittest.mock import Mock, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -16,6 +17,13 @@ from mpk_lammps_ver4 import (
     save_lammps_input,
     LAMMPSProcessingError
 )
+
+
+def _make_cell_with_shell_models(model_dict: dict) -> Mock:
+    """Return a mock cell whose .shell_models['model'] is model_dict."""
+    cell = Mock()
+    cell.shell_models = {'model': model_dict}
+    return cell
 
 
 class TestGenerateLammpsHeader:
@@ -42,40 +50,57 @@ class TestGenerateLammpsHeader:
 
 
 class TestGenerateChargeSettings:
-    """Test charge settings generation."""
-    
+    """Test charge settings generation.
+
+    generate_charge_settings(cell, species_id_map) now reads charges from
+    cell.shell_models['model'], which is keyed by integer type IDs.
+    """
+
     def test_charge_settings_for_species(self):
-        """Test generating charge settings for species."""
-        shell_data = {
-            'model': {
-                'Sr': {
-                    'core': {'charge': 2.0},
-                    'shell': {'charge': -0.8}
-                }
-            }
+        """Test generating charge settings for species with integer-keyed model."""
+        # Model dict is keyed by integer type IDs (NOT by species name)
+        model_dict = {
+            1: {'core':  {'charge': 2.0},
+                'shell': {'charge': -0.8}},
         }
-        species_map = {('Sr', 'core'): 1, ('Sr', 'shell'): 4}
-        
-        settings = generate_charge_settings(shell_data, species_map)
-        
+        cell = _make_cell_with_shell_models(model_dict)
+        # species_id_map is used only for reverse-lookup comments
+        species_map = {('Sr', 'core'): 1, ('Sr', 'shell'): 1}
+
+        settings = generate_charge_settings(cell, species_map)
+
         assert "set type 1 charge 2.0000000" in settings
-        assert "set type 4 charge -0.8000000" in settings
-        assert "#Sr core" in settings
-        assert "#Sr shell" in settings
-    
+        assert "set type 1 charge -0.8000000" in settings
+
     def test_skip_none_charges(self):
         """Test that None charges are skipped."""
-        shell_data = {
-            'model': {
-                'Sr': {
-                    'core': {'charge': None}
-                }
-            }
+        model_dict = {
+            1: {'core': {'charge': None}},
         }
+        cell = _make_cell_with_shell_models(model_dict)
         species_map = {('Sr', 'core'): 1}
-        
-        settings = generate_charge_settings(shell_data, species_map)
+
+        settings = generate_charge_settings(cell, species_map)
         assert "set type 1" not in settings
+
+    def test_cell_without_shell_models_returns_empty(self):
+        """If cell has no shell_models attribute, return empty string."""
+        cell = Mock(spec=[])  # no attributes at all
+        species_map = {('Sr', 'core'): 1}
+
+        settings = generate_charge_settings(cell, species_map)
+        assert settings == ""
+
+    def test_comment_contains_species_name(self):
+        """Reverse-lookup from species_id_map should appear in comment."""
+        model_dict = {
+            1: {'core': {'charge': 2.0}},
+        }
+        cell = _make_cell_with_shell_models(model_dict)
+        species_map = {('Sr', 'core'): 1}
+
+        settings = generate_charge_settings(cell, species_map)
+        assert "#Sr core" in settings
 
 
 class TestGenerateGroupDefinitions:
@@ -136,18 +161,24 @@ class TestGenerateTemperatureRamps:
 
 
 class TestGenerateLammpsInput:
-    """Test complete LAMMPS input generation."""
-    
+    """Test complete LAMMPS input generation.
+
+    generate_lammps_input(cell, springs, potentials, species_id_map, ...)
+    The first argument is a cell object whose .shell_models stores the charge
+    info (integer-keyed), NOT a raw dict.
+    """
+
+    def _make_cell(self):
+        """Return a mock cell with integer-keyed shell_models."""
+        model_dict = {
+            1: {'core':  {'charge': 2.0},
+                'shell': {'charge': -0.8}},
+        }
+        return _make_cell_with_shell_models(model_dict)
+
     def test_complete_input_generation(self):
         """Test generating complete LAMMPS input."""
-        shell_data = {
-            'model': {
-                'Sr': {
-                    'core': {'charge': 2.0},
-                    'shell': {'charge': -0.8}
-                }
-            }
-        }
+        cell = self._make_cell()
         springs = {'Sr': {'k2': 100.0, 'k4': 10.0}}
         potentials = [{
             'kind': 'buck',
@@ -159,13 +190,13 @@ class TestGenerateLammpsInput:
             'cutoffs': [0.0, 10.0]
         }]
         species_map = {('Sr', 'core'): 1, ('Sr', 'shell'): 2}
-        
+
         content = generate_lammps_input(
-            shell_data, springs, potentials, species_map,
+            cell, springs, potentials, species_map,
             "Test Model", [100.0], 0.1, 2.0,
             500, 0.0002, 20000, 30000, 50000, "traj"
         )
-        
+
         assert "clear" in content
         assert "Test Model" in content
         assert "set type 1 charge" in content

@@ -30,7 +30,7 @@ A robust Python script for processing shell models and generating LAMMPS structu
 - **Multiple Temperature Support**: Generate temperature ramps for multi-stage simulations
 - **Advanced MD Parameters**: Configurable equilibration and production steps
 - **File Overwrite Protection**: Warnings before overwriting existing files
-- **Comprehensive Testing**: 57 unit and integration tests for reliability
+- **Comprehensive Testing**: 70 unit and integration tests for reliability
 
 ## 📦 Requirements
 
@@ -110,8 +110,8 @@ The script will prompt you for:
 ⚙️  CONFIGURATION SUMMARY
 ======================================================================
   Model file       : ./potential.pickle
-  Supercell dims   : [8, 8, 8]
-  Symmetry         : file
+  Supercell dims   : [2, 2, 2]
+  Symmetry         : cubic
   Output filename  : structure
   Temperatures [K] : [10.0, 50.0, 100.0, 200.0]
   T-stat damping   : 0.1
@@ -136,7 +136,7 @@ The script will prompt you for:
 
 The script now supports two material types:
 
-1. **`pure`** (default): Single perovskite composition  
+1. **`pure`** (default): Single perovskite composition
    - Requires: `species_a` and `species_b` to be specified
    - Example: ABO₃ perovskite (e.g., SrTiO₃)
 
@@ -216,7 +216,7 @@ Detailed processing log with timestamps and debug information
 
 ## 🧪 Testing
 
-The project includes a comprehensive test suite with **57 tests** covering all major components.
+The project includes a comprehensive test suite with **70 tests** covering all major components.
 
 ### Run All Tests
 
@@ -241,13 +241,13 @@ pytest tests/test_config.py -v
 # Integration tests (5 tests)
 pytest tests/test_integration.py -v
 
-# LAMMPS generation tests (13 tests)
+# LAMMPS generation tests (16 tests)
 pytest tests/test_lammps_generation.py -v
 
 # Model loading tests (6 tests)
 pytest tests/test_model_loading.py -v
 
-# Shell model tests (10 tests)
+# Shell model tests (21 tests)
 pytest tests/test_shell_model.py -v
 
 # Utilities tests (6 tests)
@@ -261,9 +261,9 @@ tests/
 ├── conftest.py              # Pytest fixtures and mocked dependencies
 ├── test_config.py           # Configuration validation (17 tests)
 ├── test_integration.py      # End-to-end workflows (5 tests)
-├── test_lammps_generation.py # LAMMPS input generation (13 tests)
+├── test_lammps_generation.py # LAMMPS input generation (16 tests)
 ├── test_model_loading.py    # Model loading (6 tests)
-├── test_shell_model.py      # Shell model processing (10 tests)
+├── test_shell_model.py      # Shell model processing (21 tests)
 └── test_utilities.py        # Utility functions (6 tests)
 ```
 
@@ -305,8 +305,19 @@ lammps_mpk_script/
 2. **Model Processing**
    - Loads pickle files with validation
    - Extracts shell model data (charges, springs, potentials)
-   - Maps species to numeric IDs
+   - Maps species to numeric IDs via `create_species_id_map`
+   - **Revises the ID map** via `revise_species_id_map`: removes species not
+     present in `model.charges`, reassigns sequential IDs, and emits clear
+     `WARNING` messages (Option B — warn + continue rather than crash)
+   - Calls `initialize_shell_models_data` → `map_charges_to_new_model` →
+     `validate_shell_model_data` to populate all integer-keyed charge/mass entries
+   - **Option B fall-back** via `_sanitize_shell_model_for_writing`: replaces any
+     remaining `None` charge/mass values with `0.0` before calling
+     `writeToLAMMPSStructure`, preventing `TypeError` for unknown species
    - Normalizes nomenclature (`shel` → `shell`)
+   - Note: `create_string_named_cell` converts atom _names_ to strings but
+     intentionally keeps `shell_models['model']` keys as **integers** so
+     that `writeToLAMMPSStructure` (which accesses them via `ii+1`) works correctly
 
 3. **Supercell Generation**
    - Creates perovskite structures with specified dimensions
@@ -335,15 +346,15 @@ lammps_mpk_script/
 - **Logging**: Comprehensive logging at all operational levels (debug, info, warning, error)
 - **Validation**: Multi-level validation ensures data integrity throughout the pipeline
 - **Modularity**: Functions have single, well-defined responsibilities
-- **Testing**: Extensive test coverage (57 tests) with mocked external dependencies
+- **Testing**: Extensive test coverage (70 tests) with mocked external dependencies
 - **Documentation**: Detailed docstrings and comprehensive readme documentation
 
 ## 👥 Credits
 
 - **Author**: Mukesh Khanore
 - **LAMMPS MD Logic**: Mónica Elisabet Graf and Mauro António Pereira Gonçalves
-- **Date**: 26-Feb-2026
-- **Version**: 4.3
+- **Date**: 01-Mar-2026
+- **Version**: 4.4
 
 ## 📝 License
 

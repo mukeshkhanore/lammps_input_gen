@@ -4,7 +4,7 @@
 
 This directory contains comprehensive tests for `mpk_lammps_ver4.py`, covering configuration validation, model loading, shell model processing, and LAMMPS input generation.
 
-The test suite consists of **57 tests** with 100% pass rate, validating all critical workflows and edge cases.
+The test suite consists of **70 tests** with 100% pass rate, validating all critical workflows and edge cases.
 
 ## Test Structure
 
@@ -14,9 +14,9 @@ tests/
 ├── conftest.py              # Pytest fixtures and mocked external dependencies
 ├── test_config.py           # Configuration validation (17 tests)
 ├── test_integration.py      # End-to-end integration tests (5 tests)
-├── test_lammps_generation.py # LAMMPS input generation (13 tests)
+├── test_lammps_generation.py # LAMMPS input generation (16 tests)
 ├── test_model_loading.py    # Model file loading (6 tests)
-├── test_shell_model.py      # Shell model data extraction (10 tests)
+├── test_shell_model.py      # Shell model data extraction (21 tests)
 └── test_utilities.py        # Utility function tests (6 tests)
 ```
 
@@ -33,6 +33,8 @@ Or install individually:
 ```bash
 pip install pytest pytest-cov pytest-mock
 ```
+
+## Running Tests
 
 ### Run all tests
 
@@ -84,44 +86,6 @@ pytest -m unit
 pytest -m integration
 ```
 
-### Run specific test file
-
-```bash
-pytest tests/test_config.py
-```
-
-### Run specific test class
-
-```bash
-pytest tests/test_config.py::TestConfigClass
-```
-
-### Run specific test
-
-```bash
-pytest tests/test_config.py::TestConfigClass::test_valid_config_passes_validation
-```
-
-### Run with coverage report
-
-```bash
-pytest --cov=mpk_lammps_ver4 --cov-report=html
-```
-
-This generates an HTML coverage report in `htmlcov/index.html`.
-
-### Run only unit tests
-
-```bash
-pytest -m unit
-```
-
-### Run only integration tests
-
-```bash
-pytest -m integration
-```
-
 ## Test Categories
 
 ### Unit Tests
@@ -143,20 +107,31 @@ pytest -m integration
   - Model structure validation
   - Handling of missing or empty charges
 
-- **`test_shell_model.py`** (10 tests): Shell model processing
+- **`test_shell_model.py`** (21 tests): Shell model processing
   - Data extraction from model objects
-  - Species ID mapping
-  - Data validation and completeness checks
+  - Species ID mapping (`create_species_id_map`)
+  - **Species ID map revision** (`revise_species_id_map` — 5 tests):
+    - Valid species are preserved with their original ordering
+    - Invalid species (not in `model.charges`) are removed with a `WARNING` log
+    - IDs are reassigned sequentially after removals (no gaps)
+    - Empty model charges returns only oxygen
+    - No warning emitted when all species are valid
+  - Data validation: when any value is `None`, all values in that part become `None`
+  - Option B: warns for unknown species rather than crashing
+  - String cell creation: `shell_models['model']` keys stay as **integers**
   - Nomenclature normalization (`shel` → `shell`)
   - Handling of unknown particle types
+  - `_sanitize_shell_model_for_writing` is exercised indirectly through
+    the integration test and `process_shell_model` call chain
 
-- **`test_lammps_generation.py`** (13 tests): LAMMPS input generation
+- **`test_lammps_generation.py`** (16 tests): LAMMPS input generation
   - Header generation with model metadata
-  - Charge settings for different species
+  - Charge settings: `generate_charge_settings(cell, species_id_map)` reads from
+    `cell.shell_models['model']` (integer-keyed by type ID)
   - Group definitions (cores vs. shells)
   - Temperature ramps with equilibration stages
   - Neighbor list settings
-  - Complete input file generation
+  - Complete input: `generate_lammps_input(cell, ...)` — first arg is a cell object
   - File I/O validation
 
 ### Integration Tests
@@ -189,7 +164,7 @@ The test suite comprehensively covers:
 - ✅ Utility functions (mixing type determination)
 - ✅ Model loading (valid files and error cases)
 - ✅ Shell model data extraction and validation
-- ✅ Species ID mapping and normalization
+- ✅ Species ID mapping, revision, and normalization
 - ✅ LAMMPS input generation (all sections)
 - ✅ File I/O operations
 - ✅ Error handling and custom exceptions
@@ -220,18 +195,25 @@ def test_negative_temperature_fails():
 ```python
 def test_complete_workflow(sample_pickle_file, temp_dir, mock_cell):
     """Test complete processing workflow."""
+    from unittest.mock import Mock
+
     # Load and process model
     model = load_model(sample_pickle_file)
     shell_data, springs, potentials = extract_shell_model_data(model)
-    
-    # Create species map and generate LAMMPS input
+
+    # Create species map
     species_map = create_species_id_map(mock_cell, model)
+
+    # generate_lammps_input expects a *cell* object with .shell_models
+    mock_input_cell = Mock()
+    mock_input_cell.shell_models = shell_data
+
     content = generate_lammps_input(
-        shell_data, springs, potentials, species_map,
+        mock_input_cell, springs, potentials, species_map,
         "Test Model", [100.0], 0.1, 2.0,
         500, 0.0002, 20000, 30000, 50000, "traj"
     )
-    
+
     # Save and verify
     output_file = os.path.join(temp_dir, "test_lammps.in")
     save_lammps_input(content, output_file)
