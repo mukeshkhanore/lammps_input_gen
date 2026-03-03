@@ -1,5 +1,41 @@
 """
 Pytest configuration and fixtures for LAMMPS script tests.
+
+Environment
+-----------
+Activate the Python environment before running tests::
+
+    source ~/python_env/py311/bin/activate
+    pytest -v
+
+About the `sys.path.append(../lib/...)` lines
+----------------------------------------------
+In versions prior to v4.5, `mpk_lammps_ver4.py` contained the following
+runtime path-injection block at module level:
+
+    sys.path.append(r'../lib/pm__py/pm__cell/')
+    sys.path.append(r'../lib/pm__py/pm__constants/')
+    sys.path.append(r'../lib/pm__py/pm__data_from_file/')
+    sys.path.append(r'../lib/pm__py/pm__utilities/')
+    sys.path.append(r"../lib/mk__py/")
+    sys.path.append(r"../lib/pm__py/pm__chemical_order/")
+    sys.path.append(r"../lib/transformations/")
+    sys.path.append(r"../lib/pm__py/pm__shell_model_kit/")
+
+**These lines were removed in v4.5.** The script now relies on the `pm__`
+packages being properly installed in the active Python environment or present
+on ``PYTHONPATH``.
+
+The test suite was never affected by this change.  The three packages that
+``mpk_lammps_ver4.py`` imports at the top level — ``pm__cell``,
+``pm__chemical_order``, and ``pm__shell_model_kit`` — are mocked at the
+``sys.modules`` level right below, before the module is imported.  This means:
+
+* Tests run correctly in any environment (local, CI, container).
+* No installation of ``pm__cell``, ``pm__chemical_order``, or
+  ``pm__shell_model_kit`` is required to execute the test suite.
+* Any call into those libraries during tests goes to a ``MagicMock``, which is
+  controlled by individual test fixtures.
 """
 import pytest
 import os
@@ -10,7 +46,9 @@ from pathlib import Path
 from unittest.mock import Mock, MagicMock
 import pickle
 
-# Inject mock modules for the missing dependencies
+# Mock the three top-level imports that mpk_lammps_ver4 needs.
+# These must be injected into sys.modules BEFORE the module is imported so that
+# Python's import machinery never tries to find the real packages on disk.
 sys.modules['pm__cell'] = MagicMock()
 sys.modules['pm__chemical_order'] = MagicMock()
 sys.modules['pm__shell_model_kit'] = MagicMock()

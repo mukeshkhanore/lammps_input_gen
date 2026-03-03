@@ -6,6 +6,54 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [4.5] – 2026-03-03
+
+### Fixed
+
+- **Shell preservation in `cubic` and `random` symmetry modes** — Shells are now
+  correctly carried through the supercell creation pipeline when `symmetry` is
+  `"cubic"` or `"random"`. Previously, core-shell pairing was lost during the
+  `pm__cell` call chain, producing cells with unmatched or missing shells.
+
+- **`file` mode structure reading** — The `GS.gulp` read path in
+  `create_supercell(symmetry="file")` now correctly handles atom ordering and
+  passes the lattice to subsequent steps without dropping shell atoms.
+
+### Removed
+
+- **Runtime `sys.path.append` block** — The following eight lines were removed
+  from the module header:
+
+  ```python
+  sys.path.append(r'../lib/pm__py/pm__cell/')
+  sys.path.append(r'../lib/pm__py/pm__constants/')
+  sys.path.append(r'../lib/pm__py/pm__data_from_file/')
+  sys.path.append(r'../lib/pm__py/pm__utilities/')
+  sys.path.append(r"../lib/mk__py/")
+  sys.path.append(r"../lib/pm__py/pm__chemical_order/")
+  sys.path.append(r"../lib/transformations/")
+  sys.path.append(r"../lib/pm__py/pm__shell_model_kit/")
+  ```
+
+  These were deployment-specific path hacks that assumed a fixed `../lib/`
+  directory layout. The script now relies on the `pm__` packages being properly
+  installed in the active Python environment or already present on `PYTHONPATH`.
+  See the updated [Installation](#-installation) section in `README.md`.
+
+### Changed
+
+- **Version string** updated from `4.4` to `4.5`; **date** updated to
+  `03-03-2026`.
+
+### Tests (70 tests, 100% pass)
+
+No new tests were added in this patch release; all 70 existing tests continue
+to pass unchanged. The test suite was never affected by the `sys.path.append`
+removal because `pm__cell`, `pm__chemical_order`, and `pm__shell_model_kit` are
+mocked at the `sys.modules` level in `conftest.py`.
+
+---
+
 ## [4.4] – 2026-03-01
 
 ### Added

@@ -2,9 +2,12 @@
 
 ## Overview
 
-This directory contains comprehensive tests for `mpk_lammps_ver4.py`, covering configuration validation, model loading, shell model processing, and LAMMPS input generation.
+This directory contains comprehensive tests for `mpk_lammps_ver4.py` (**v4.5**),
+covering configuration validation, model loading, shell model processing, and
+LAMMPS input generation.
 
-The test suite consists of **70 tests** with 100% pass rate, validating all critical workflows and edge cases.
+The test suite consists of **70 tests** with 100% pass rate, validating all
+critical workflows and edge cases.
 
 ## Test Structure
 
@@ -22,17 +25,23 @@ tests/
 
 ### Installation
 
-Install test dependencies:
+1. **Activate the Python environment:**
 
-```bash
-pip install -r requirements-test.txt
-```
+   ```bash
+   source ~/python_env/py311/bin/activate
+   ```
 
-Or install individually:
+2. **Install test dependencies:**
 
-```bash
-pip install pytest pytest-cov pytest-mock
-```
+   ```bash
+   pip install -r requirements-test.txt
+   ```
+
+   Or install individually:
+
+   ```bash
+   pip install pytest pytest-cov pytest-mock
+   ```
 
 ## Running Tests
 
@@ -153,7 +162,25 @@ Located in `conftest.py`:
 - **`sample_config`**: Sample configuration object
 - **`mock_gulp_file`**: Mock GS.gulp file
 
-> **Note**: External dependencies such as `pm__cell` and `pm__chemical_order` are mocked natively in `conftest.py` allowing tests to run freely without installing these specific packages beforehand.
+> **Note on `sys.path` (v4.5 change):** The following eight `sys.path.append`
+> lines were removed from `mpk_lammps_ver4.py` in v4.5:
+>
+> ```python
+> sys.path.append(r'../lib/pm__py/pm__cell/')
+> sys.path.append(r'../lib/pm__py/pm__constants/')
+> sys.path.append(r'../lib/pm__py/pm__data_from_file/')
+> sys.path.append(r'../lib/pm__py/pm__utilities/')
+> sys.path.append(r"../lib/mk__py/")
+> sys.path.append(r"../lib/pm__py/pm__chemical_order/")
+> sys.path.append(r"../lib/transformations/")
+> sys.path.append(r"../lib/pm__py/pm__shell_model_kit/")
+> ```
+>
+> These deployment-specific path hacks no longer exist in the source.
+> The `pm__` packages must now be installed in your environment or present on
+> `PYTHONPATH`. The test suite is unaffected: `pm__cell`, `pm__chemical_order`,
+> and `pm__shell_model_kit` continue to be mocked at the `sys.modules` level
+> in `conftest.py`, so no physical paths are needed to run the tests.
 
 ## Test Coverage
 

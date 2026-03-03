@@ -6,10 +6,10 @@ This script processes shell models for LAMMPS structure and setup file generatio
 Mass ratio is set to 98% for core and 2% for shell.
 
 Author: Mukesh Khanore
-Date: 01-03-2026
-Note: missing species from model implemented, random is still pending.
+Date: 03-03-2026
+Note: missing species and random ordering for binary mixure for A and B position implemented
 LAMMPS MD Logic: Mónica Elisabet Graf and Mauro António Pereira Gonçalves
-Version: 4.4 - Fixed shell preservation in cubic/random modes; proper FILE mode handling
+Version: 4.5 - Fixed shell preservation in cubic/random modes; proper FILE mode handling
 """
 
 import sys
@@ -1058,52 +1058,144 @@ def create_supercell(model: Any, supercell_dims: List[int], symmetry: str = "cub
 
             available_species = {charge.species for charge in model.charges}
 
-            # Validate species_a (can be single like "Ba" or mixed like "Ba/Ca")
+            # Warn about species_a (can be single like "Ba" or mixed like "Ba/Ca") not in model
             if species_a is not None:
                 species_a_list = [s.strip() for s in species_a.split('/')]
-                for sp in species_a_list:
-                    if sp not in available_species:
-                        raise ValidationError(
-                            f"Custom species '{sp}' (from species_a='{species_a}') not found in model. "
-                            f"Available species: {sorted(list(available_species))}"
-                        )
+                missing_a = [sp for sp in species_a_list if sp not in available_species]
+                if missing_a:
+                    logger.warning(
+                        f"⚠️  The following A-site species are NOT found in the model potential data: "
+                        f"{missing_a}. They will have charge=None and mass=None — they will be EXCLUDED "
+                        f"from LAMMPS charge-set and bond sections. "
+                        f"Species available in the model: {sorted(available_species)}."
+                    )
+            else:
+                missing_a = []
 
-            # Validate species_b (can be single like "Ti" or mixed like "Zr/Sn")
+            # Warn about species_b (can be single like "Ti" or mixed like "Zr/Sn") not in model
             if species_b is not None:
                 species_b_list = [s.strip() for s in species_b.split('/')]
-                for sp in species_b_list:
-                    if sp not in available_species:
-                        raise ValidationError(
-                            f"Custom species '{sp}' (from species_b='{species_b}') not found in model. "
-                            f"Available species: {sorted(list(available_species))}"
+                missing_b = [sp for sp in species_b_list if sp not in available_species]
+                if missing_b:
+                    logger.warning(
+                        f"⚠️  The following B-site species are NOT found in the model potential data: "
+                        f"{missing_b}. They will have charge=None and mass=None — they will be EXCLUDED "
+                        f"from LAMMPS charge-set and bond sections. "
+                        f"Species available in the model: {sorted(available_species)}."
+                    )
+            else:
+                missing_b = []
+
+            # Decide whether to use chemical order: only if user-provided species match the model
+            # If user provided species that don't exist in model, skip chemical order and use simple structure
+            use_chemical_order = (species_a is not None and not missing_a) or species_a is None
+            use_chemical_order = use_chemical_order and ((species_b is not None and not missing_b) or species_b is None)
+
+            if use_chemical_order:
+                # Prepare structure with generic names for chemical order
+                cell = pmc.Cell(convention='zerolist', prescribe_N=0)
+                cell.is_shell_model = True
+                cell.simplePerovskite(ABO_names=["A", "B", "O"], dimensions=[nx, ny, nz], coreshell=True)
+                
+                # Position-aware validation: only the position being mixed needs 2+ species
+                # The unmixed position can have single species
+                if position == "A":
+                    if isinstance(replacements_a, (list, tuple)) and len(replacements_a) < 2:
+                        logger.warning(
+                            f"⚠️  Position 'A' is set for mixing but replacements_a has only {len(replacements_a)} species. "
+                            f"Mixing requires 2+ species. Will attempt to proceed, but may encounter issues."
+                        )
+                elif position == "B":
+                    if isinstance(replacements_b, (list, tuple)) and len(replacements_b) < 2:
+                        logger.warning(
+                            f"⚠️  Position 'B' is set for mixing but replacements_b has only {len(replacements_b)} species. "
+                            f"Mixing requires 2+ species. Will attempt to proceed, but may encounter issues."
                         )
 
-            # Prepare structure
-            cell = pmc.Cell(convention='zerolist', prescribe_N=0)
-            cell.is_shell_model = True
-            cell.simplePerovskite(ABO_names=["A", "B", "O"], dimensions=[nx, ny, nz], coreshell=True)
-
-            # Apply chemical order with selected species
-            try:
-                cell = chemical_order_A.prescribeChemicalOrderForBox(
-                    cell, position="A", replacements=replacements_a, 
-                    dimensions=[nx, ny, nz], coreshell=True
+                # Apply chemical order with selected species
+                try:
+                    cell = chemical_order_A.prescribeChemicalOrderForBox(
+                        cell, position="A", replacements=replacements_a, 
+                        dimensions=[nx, ny, nz], coreshell=True
+                    )
+                    cell = chemical_order_B.prescribeChemicalOrderForBox(
+                        cell, position="B", replacements=replacements_b, 
+                        dimensions=[nx, ny, nz], coreshell=True
+                    )
+                    cell.pairCoresShells()
+                except (AttributeError, ValueError, TypeError, KeyError, IndexError) as e:
+                    raise LAMMPSProcessingError(f"Failed to apply chemical order: {e}") from e
+                logger.info(f"✓ Applied chemical order for A-site={replacements_a}, B-site={replacements_b}")
+            else:
+                # User-provided species don't match model: skip chemical order, use simple structure
+                # Extract actual species names (first element if list, else the string itself)
+                species_a_name = replacements_a[0] if isinstance(replacements_a, (list, tuple)) else replacements_a
+                species_b_name = replacements_b[0] if isinstance(replacements_b, (list, tuple)) else replacements_b
+                
+                # Create structure with actual species names
+                cell = pmc.Cell(convention='zerolist', prescribe_N=0)
+                cell.is_shell_model = True
+                cell.simplePerovskite(ABO_names=[species_a_name, species_b_name, "O"], dimensions=[nx, ny, nz], coreshell=True)
+                
+                logger.info(
+                    f"⚠️  User-provided species don't match model. Skipping chemical order. "
+                    f"Using simple structure creation with A-site={replacements_a}, B-site={replacements_b}"
                 )
-                cell = chemical_order_B.prescribeChemicalOrderForBox(
-                    cell, position="B", replacements=replacements_b, 
-                    dimensions=[nx, ny, nz], coreshell=True
-                )
+                cell.countPresentSpecies()
                 cell.pairCoresShells()
-            except (AttributeError, ValueError, TypeError, KeyError) as e:
-                raise LAMMPSProcessingError(f"Failed to apply chemical order: {e}") from e
-
-            # Apply perturbation for random symmetry
-            perturbation = np.zeros((cell.N, 3))
+                logger.info(f"✓ Created structure without chemical order (user-provided species not in model)")
+            
+            # Apply random mixing if requested
+            # Note: replacements_a and replacements_b are already correctly set above (lines ~1050, 1061)
+            # from either user input or model.AB_specie - NO NEED TO RE-PARSE!
             if symmetry == "random":
-                logger.info("Applying random perturbations to atomic positions")
-                for i in range(cell.N):
-                    perturbation[i] = np.random.uniform(-0.05, 0.05, 3)
-                cell.perturb(perturbation)            
+                if position == "A":
+                    mix_species = replacements_a
+                    # Only process if we have exactly 2 species to mix
+                    if len(replacements_a) < 2:
+                        logger.warning(
+                            f"⚠️  Position is 'A' but replacements_a has only {len(replacements_a)} species. "
+                            f"Need at least 2 species for mixing. Skipping random mixing."
+                        )
+                    else:
+                        for i, atm in enumerate(cell.atom):
+                            if atm.name == replacements_a[0] and str(atm.coreshell).lower().strip() in ('core', 'cor'):
+                                rnd = np.random.rand()
+                                if rnd < mix_ratio:
+                                    atm.name = replacements_a[1]
+                                    # Find and update the paired shell
+                                    if i + 1 < len(cell.atom) and str(cell.atom[i + 1].coreshell).lower().strip() in ('shell', 'shel'):
+                                        cell.atom[i + 1].name = replacements_a[1]
+                                    else:
+                                        logger.warning(f"⚠️  No paired shell found for core at index {i}")
+                        cell.countPresentSpecies()
+                        cell.pairCoresShells()
+                        logger.info(f"✓ Applied random mixing at position {position} to {mix_species} with ratio {mix_ratio}")
+                        logger.info(f"  Species count: {cell.species_count}, Species names: {cell.species_name}")
+                
+                elif position == "B":
+                    mix_species = replacements_b
+                    # Only process if we have exactly 2 species to mix
+                    if len(replacements_b) < 2:
+                        logger.warning(
+                            f"⚠️  Position is 'B' but replacements_b has only {len(replacements_b)} species. "
+                            f"Need at least 2 species for mixing. Skipping random mixing."
+                        )
+                    else:
+                        for i, atm in enumerate(cell.atom):
+                            if atm.name == replacements_b[0] and str(atm.coreshell).lower().strip() in ('core', 'cor'):
+                                rnd = np.random.rand()
+                                if rnd < mix_ratio:
+                                    atm.name = replacements_b[1]
+                                    # Find and update the paired shell
+                                    if i + 1 < len(cell.atom) and str(cell.atom[i + 1].coreshell).lower().strip() in ('shell', 'shel'):
+                                        cell.atom[i + 1].name = replacements_b[1]
+                                    else:
+                                        logger.warning(f"⚠️  No paired shell found for core at index {i}")
+                        cell.countPresentSpecies()
+                        cell.pairCoresShells()
+                        logger.info(f"✓ Applied random mixing at position {position} to {mix_species} with ratio {mix_ratio}")
+                        logger.info(f"  Species count: {cell.species_count}, Species names: {cell.species_name}")
         else:
             # Validate that species_a and species_b match model's available species
             if not hasattr(model, 'AB_specie') or "A" not in model.AB_specie or "B" not in model.AB_specie:
@@ -1679,7 +1771,16 @@ def save_lammps_input(content: str, filename: str = "lammps.in") -> None:
 # ============================================================================
 def get_user_config() -> Config:
     """
-    Get configuration parameters from user input.
+    Get configuration parameters from user input with smart flow based on symmetry.
+    
+    Flow:
+    1. Ask model file
+    2. Ask symmetry
+    3. If symmetry == "file": skip material_type/position/species → go to supercell_dims
+    4. If symmetry == "cubic"/"random": ask material_type
+       - If "mix": ask position, species, mix_ratio
+       - If "pure": ask species_a, species_b
+    5. Ask supercell_dims, then simulation parameters
     """
     logger.info("=" * 70)
     logger.info("🔧 Shell Model Processing for LAMMPS - Configuration")
@@ -1690,92 +1791,124 @@ def get_user_config() -> Config:
     if not model_file:
         model_file = DEFAULT_MODEL_FILE
     
-    # Material type
+    # SYMMETRY FIRST - controls what questions follow
     while True:
-        material_type = input("\nEnter material type (mix/pure) [default: pure]: ").strip().lower()
-        if not material_type:
-            material_type = "pure"
+        symmetry = input(f"\nEnter symmetry type (file/cubic/random) [default: {DEFAULT_SYMMETRY}]: ").strip().lower()
+        if not symmetry:
+            symmetry = DEFAULT_SYMMETRY
         
-        if material_type not in ["mix", "pure"]:
-            logger.error("❌ Error: Please enter either 'mix' or 'pure'")
+        if symmetry not in ["file", "cubic", "random"]:
+            logger.error("❌ Error: Please enter 'file', 'cubic', or 'random'")
             continue
         
-        logger.info(f"✓ Material type selected: {material_type}")
+        logger.info(f"✓ Symmetry selected: {symmetry}")
         break
     
+    # Initialize with defaults
+    material_type = "pure"
     position = None
     species_a = None
     species_b = None
     mix_ratio = None
     
-    if material_type == "mix":
+    # Only ask material_type if NOT file mode
+    if symmetry != "file":
         while True:
-            position = input("\nEnter position (A/B) [default: A]: ").strip().upper()
-            if not position:
-                position = "A"
+            material_type = input("\nEnter material type (mix/pure) [default: pure]: ").strip().lower()
+            if not material_type:
+                material_type = "pure"
             
-            if position not in ["A", "B"]:
-                logger.error("❌ Error: Please enter either 'A' or 'B'")
+            if material_type not in ["mix", "pure"]:
+                logger.error("❌ Error: Please enter either 'mix' or 'pure'")
                 continue
             
-            logger.info(f"✓ Position selected: {position}")
+            logger.info(f"✓ Material type selected: {material_type}")
             break
         
-        while True:
-            mix_species = input(f"\nEnter the two species to mix for position {position} (separated by space) [e.g., Ba Ca]: ").strip()
-            if not mix_species or ' ' not in mix_species:
-                logger.error("❌ Error: Please enter two species separated by a space")
-                continue
-            
-            parts = [s.strip() for s in mix_species.split()]
-            if len(parts) != 2 or not parts[0] or not parts[1]:
-                logger.error("❌ Error: Please enter exactly two valid species separated by a space")
-                continue
-            
-            if ',' in parts[0] or '/' in parts[0] or ',' in parts[1] or '/' in parts[1]:
-                logger.error("❌ Error: Please enter only atomic symbols without commas or slashes")
-                continue
-                
-            species_1, species_2 = parts[0], parts[1]
-            logger.info(f"✓ Mixed species selected: {species_1} and {species_2}")
-            break
-            
-        while True:
-            mix_ratio_input = input(f"\nEnter fraction of {species_1} (0.0 to 1.0) [e.g., 0.5 for 50:50]: ").strip()
-            if not mix_ratio_input:
-                logger.error("❌ Error: Mix ratio cannot be empty")
-                continue
-            
-            try:
-                mix_ratio = float(mix_ratio_input)
-                if mix_ratio < 0.0 or mix_ratio > 1.0:
-                    logger.error("❌ Error: Fraction must be between 0.0 and 1.0")
-                    continue
-                
-                logger.info(f"✓ Mix fraction selected: {mix_ratio} for {species_1} (and {1.0 - mix_ratio:.3g} for {species_2})")
-                break
-                
-            except ValueError:
-                logger.error("❌ Error: Please enter a valid decimal number")
-        
-        if position == "A":
-            species_a = f"{species_1}/{species_2}"
+        # Only ask position/species/ratio if MIX mode
+        if material_type == "mix":
             while True:
-                species_b = input("\nEnter single species for remaining B site [e.g., Ti, Zr, Sn]: ").strip()
-                if not species_b:
-                    logger.error("❌ Error: Species B cannot be empty")
+                position = input("\nEnter position (A/B) [default: A]: ").strip().upper()
+                if not position:
+                    position = "A"
+                
+                if position not in ["A", "B"]:
+                    logger.error("❌ Error: Please enter either 'A' or 'B'")
                     continue
                 
-                if ' ' in species_b or ',' in species_b:
-                    logger.error("❌ Error: Please enter only ONE species for B site")
-                    continue
-                
-                logger.info(f"✓ Species B selected: {species_b}")
+                logger.info(f"✓ Position selected: {position}")
                 break
+            
+            while True:
+                mix_species = input(f"\nEnter the two species to mix for position {position} (separated by space) [e.g., Ba Ca]: ").strip()
+                if not mix_species or ' ' not in mix_species:
+                    logger.error("❌ Error: Please enter two species separated by a space")
+                    continue
+                
+                parts = [s.strip() for s in mix_species.split()]
+                if len(parts) != 2 or not parts[0] or not parts[1]:
+                    logger.error("❌ Error: Please enter exactly two valid species separated by a space")
+                    continue
+                
+                if ',' in parts[0] or '/' in parts[0] or ',' in parts[1] or '/' in parts[1]:
+                    logger.error("❌ Error: Please enter only atomic symbols without commas or slashes")
+                    continue
+                    
+                species_1, species_2 = parts[0], parts[1]
+                logger.info(f"✓ Mixed species selected: {species_1} and {species_2}")
+                break
+                
+            while True:
+                mix_ratio_input = input(f"\nEnter fraction of {species_2} (0.0 to 1.0) [e.g., 0.5 for 50:50]: ").strip()
+                if not mix_ratio_input:
+                    logger.error("❌ Error: Mix ratio cannot be empty")
+                    continue
+                
+                try:
+                    mix_ratio = float(mix_ratio_input)
+                    if mix_ratio < 0.0 or mix_ratio > 1.0:
+                        logger.error("❌ Error: Fraction must be between 0.0 and 1.0")
+                        continue
+                    
+                    logger.info(f"✓ Mix fraction selected: {mix_ratio} for {species_2} (and {1.0 - mix_ratio:.3g} for {species_1})")
+                    break
+                    
+                except ValueError:
+                    logger.error("❌ Error: Please enter a valid decimal number")
+            
+            if position == "A":
+                species_a = f"{species_1}/{species_2}"
+                while True:
+                    species_b = input("\nEnter single species for remaining B site [e.g., Ti, Zr, Sn]: ").strip()
+                    if not species_b:
+                        logger.error("❌ Error: Species B cannot be empty")
+                        continue
+                    
+                    if ' ' in species_b or ',' in species_b:
+                        logger.error("❌ Error: Please enter only ONE species for B site")
+                        continue
+                    
+                    logger.info(f"✓ Species B selected: {species_b}")
+                    break
+            else:
+                species_b = f"{species_1}/{species_2}"
+                while True:
+                    species_a = input("\nEnter single species for remaining A site [e.g., Ba, Ca, Pb]: ").strip()
+                    if not species_a:
+                        logger.error("❌ Error: Species A cannot be empty")
+                        continue
+                    
+                    if ' ' in species_a or ',' in species_a:
+                        logger.error("❌ Error: Please enter only ONE species for A site")
+                        continue
+                    
+                    logger.info(f"✓ Species A selected: {species_a}")
+                    break
+        
         else:
-            species_b = f"{species_1}/{species_2}"
+            # PURE mode only (not MIX)
             while True:
-                species_a = input("\nEnter single species for remaining A site [e.g., Ba, Ca, Pb]: ").strip()
+                species_a = input("\nEnter single species for A site [e.g., Ba, Ca, Pb]: ").strip()
                 if not species_a:
                     logger.error("❌ Error: Species A cannot be empty")
                     continue
@@ -1786,35 +1919,24 @@ def get_user_config() -> Config:
                 
                 logger.info(f"✓ Species A selected: {species_a}")
                 break
-    
+            
+            while True:
+                species_b = input("\nEnter single species for B site [e.g., Ti, Zr, Sn]: ").strip()
+                if not species_b:
+                    logger.error("❌ Error: Species B cannot be empty")
+                    continue
+                
+                if ' ' in species_b or ',' in species_b:
+                    logger.error("❌ Error: Please enter only ONE species for B site")
+                    continue
+                
+                logger.info(f"✓ Species B selected: {species_b}")
+                break
     else:
-        while True:
-            species_a = input("\nEnter single species for A site [e.g., Ba, Ca, Pb]: ").strip()
-            if not species_a:
-                logger.error("❌ Error: Species A cannot be empty")
-                continue
-            
-            if ' ' in species_a or ',' in species_a:
-                logger.error("❌ Error: Please enter only ONE species for A site")
-                continue
-            
-            logger.info(f"✓ Species A selected: {species_a}")
-            break
-        
-        while True:
-            species_b = input("\nEnter single species for B site [e.g., Ti, Zr, Sn]: ").strip()
-            if not species_b:
-                logger.error("❌ Error: Species B cannot be empty")
-                continue
-            
-            if ' ' in species_b or ',' in species_b:
-                logger.error("❌ Error: Please enter only ONE species for B site")
-                continue
-            
-            logger.info(f"✓ Species B selected: {species_b}")
-            break
-
-    # Supercell dimensions
+        # FILE mode - no species needed
+        logger.info("⚠️  File mode selected - structure will be read from GS.gulp, skipping species input")
+    
+    # Supercell dimensions (asked for all modes)
     while True:
         try:
             dims_input = input(f"\nEnter supercell dimensions (Nx Ny Nz) [default: {' '.join(map(str, DEFAULT_SUPERCELL_DIMS))}]: ").strip()
@@ -1831,11 +1953,6 @@ def get_user_config() -> Config:
             break
         except ValueError:
             logger.error("❌ Error: Please enter integers only")
-    
-    # Symmetry
-    symmetry = input(f"\nEnter symmetry type (cubic/random/file) [default: {DEFAULT_SYMMETRY}]: ").strip().lower()
-    if symmetry not in ["cubic", "random", "file"]:
-        symmetry = DEFAULT_SYMMETRY
     
     # Temperature array
     while True:
@@ -1961,22 +2078,27 @@ def get_user_config() -> Config:
     logger.info("\n" + "=" * 70)
     logger.info("⚙️  CONFIGURATION SUMMARY")
     logger.info("=" * 70)
-    logger.info(f"  Material type              : {material_type}")
-    if material_type == "mix":
-        logger.info(f"  Position                   : {position}")
-        if position == 'A':
-            logger.info(f"  Species (A mix)            : {species_a}")
-            logger.info(f"  Species (B pure)           : {species_b}")
-        else:
-            logger.info(f"  Species (A pure)           : {species_a}")
-            logger.info(f"  Species (B mix)            : {species_b}")
-        logger.info(f"  Mix ratio                  : {mix_ratio}")
+    logger.info(f"  Symmetry                   : {symmetry}")
+    
+    if symmetry == "file":
+        logger.info(f"  Structure source           : GS.gulp file")
     else:
-        logger.info(f"  Species A site             : {species_a}")
-        logger.info(f"  Species B site             : {species_b}")
+        logger.info(f"  Material type              : {material_type}")
+        if material_type == "mix":
+            logger.info(f"  Position                   : {position}")
+            if position == 'A':
+                logger.info(f"  Species (A mix)            : {species_a}")
+                logger.info(f"  Species (B pure)           : {species_b}")
+            else:
+                logger.info(f"  Species (A pure)           : {species_a}")
+                logger.info(f"  Species (B mix)            : {species_b}")
+            logger.info(f"  Mix ratio                  : {mix_ratio}")
+        else:
+            logger.info(f"  Species A site             : {species_a}")
+            logger.info(f"  Species B site             : {species_b}")
+    
     logger.info(f"  Model file                 : {config.model_file}")
     logger.info(f"  Supercell dims             : {config.supercell_dims}")
-    logger.info(f"  Symmetry                   : {config.symmetry}")
     logger.info(f"  Temperatures [K]           : {config.t_array}")
     logger.info(f"  T-stat damping             : {config.t_stat} fs")
     logger.info(f"  P-stat damping             : {config.p_stat} fs")

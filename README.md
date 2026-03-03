@@ -75,7 +75,19 @@ pytest-mock
 
    ```bash
    pip install numpy mendeleev
-   # Install pm__ modules as per your system configuration
+   ```
+
+   The `pm__` libraries (`pm__cell`, `pm__chemical_order`, `pm__shell_model_kit`)
+   must be available in your Python environment. Since v4.5 the script **no
+   longer auto-adds `../lib/...` paths** at startup — ensure the packages are
+   installed or add the lib directory to `PYTHONPATH` before running:
+
+   ```bash
+   # Option A — packages are pip-installed (recommended)
+   pip install pm__cell pm__chemical_order pm__shell_model_kit
+
+   # Option B — packages live in ../lib/ (use PYTHONPATH)
+   export PYTHONPATH="${PYTHONPATH}:../lib/pm__py/pm__cell:../lib/pm__py/pm__chemical_order:../lib/pm__py/pm__shell_model_kit"
    ```
 
 4. **Install testing dependencies (optional):**
@@ -353,8 +365,8 @@ lammps_mpk_script/
 
 - **Author**: Mukesh Khanore
 - **LAMMPS MD Logic**: Mónica Elisabet Graf and Mauro António Pereira Gonçalves
-- **Date**: 01-Mar-2026
-- **Version**: 4.4
+- **Date**: 03-Mar-2026
+- **Version**: 4.5
 
 ## 📝 License
 

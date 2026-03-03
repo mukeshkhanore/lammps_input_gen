@@ -1,0 +1,53 @@
+2026-03-03 11:49:39,512 - mpk_lammps_ver4 - INFO - Generated seed from current time 11:49:39: 114939
+2026-03-03 11:49:39,562 - mpk_lammps_ver4 - INFO - ✓ Configuration validation passed
+2026-03-03 11:49:39,579 - mpk_lammps_ver4 - INFO - ✓ Configuration validation passed
+2026-03-03 11:49:39,579 - mpk_lammps_ver4 - INFO - ✓ Configuration validation passed
+2026-03-03 11:49:39,580 - mpk_lammps_ver4 - INFO - ✓ Configuration validation passed
+2026-03-03 11:49:39,587 - mpk_lammps_ver4 - INFO - ✓ Configuration validation passed
+2026-03-03 11:49:39,599 - mpk_lammps_ver4 - INFO - ✓ Configuration validation passed
+2026-03-03 11:49:39,606 - mpk_lammps_ver4 - INFO - Loading model from /tmp/tmplosxl0o_/test_model.pickle
+2026-03-03 11:49:39,606 - mpk_lammps_ver4 - INFO - ✓ Model loaded successfully
+2026-03-03 11:49:39,607 - mpk_lammps_ver4 - INFO - ✓ Extracted shell model data for 1 species
+2026-03-03 11:49:39,607 - mpk_lammps_ver4 - INFO - ✓ Created species ID mapping from model.AB_specie (backward compatible fallback) for 3 species: ['Sr', 'Ti', 'O']
+2026-03-03 11:49:39,607 - mpk_lammps_ver4 - WARNING - No shell model potentials provided - using default section
+2026-03-03 11:49:39,608 - mpk_lammps_ver4 - INFO - ✓ Generated LAMMPS input file content
+2026-03-03 11:49:39,608 - mpk_lammps_ver4 - INFO - ✓ Successfully wrote LAMMPS input to /tmp/tmplosxl0o_/test_lammps.in
+2026-03-03 11:49:39,611 - mpk_lammps_ver4 - INFO - ✓ Configuration validation passed
+2026-03-03 11:49:39,618 - mpk_lammps_ver4 - INFO - Loading model from /tmp/tmpx4qto8k7/invalid.pickle
+2026-03-03 11:49:39,633 - mpk_lammps_ver4 - WARNING - Cell has no shell_models data; returning empty charge settings
+2026-03-03 11:49:39,650 - mpk_lammps_ver4 - WARNING - Could not process potential {'kind': 'buck', 'sp1': 'Sr', 'part1': 'core', 'sp2': 'O', 'part2': 'shell', 'params': [1000.0, 0.3, 0.0], 'cutoffs': [0.0, 10.0]}: ('O', 'shell')
+2026-03-03 11:49:39,650 - mpk_lammps_ver4 - INFO - ✓ Generated LAMMPS input file content
+2026-03-03 11:49:39,653 - mpk_lammps_ver4 - INFO - ✓ Successfully wrote LAMMPS input to /tmp/tmpw_oskzl0/test.in
+2026-03-03 11:49:39,663 - mpk_lammps_ver4 - INFO - Loading model from /tmp/tmpbnzx_3f4/test_model.pickle
+2026-03-03 11:49:39,664 - mpk_lammps_ver4 - INFO - ✓ Model loaded successfully
+2026-03-03 11:49:39,683 - mpk_lammps_ver4 - INFO - Loading model from /tmp/tmpuqk4_r5a/corrupted.pickle
+2026-03-03 11:49:39,687 - mpk_lammps_ver4 - INFO - Loading model from /tmp/tmphv5qe4n9/invalid.pickle
+2026-03-03 11:49:39,692 - mpk_lammps_ver4 - INFO - Loading model from /tmp/tmpnzjep2mw/empty_charges.pickle
+2026-03-03 11:49:39,692 - mpk_lammps_ver4 - INFO - ✓ Model loaded successfully
+2026-03-03 11:49:39,699 - mpk_lammps_ver4 - INFO - ✓ Extracted shell model data for 3 species
+2026-03-03 11:49:39,713 - mpk_lammps_ver4 - INFO - ✓ Extracted shell model data for 1 species
+2026-03-03 11:49:39,716 - mpk_lammps_ver4 - WARNING - Unknown part type 'unknown_part' for species Sr, skipping
+2026-03-03 11:49:39,716 - mpk_lammps_ver4 - INFO - ✓ Extracted shell model data for 1 species
+2026-03-03 11:49:39,725 - mpk_lammps_ver4 - INFO - ✓ Created species ID mapping from model.AB_specie (backward compatible fallback) for 3 species: ['Sr', 'Ti', 'O']
+2026-03-03 11:49:39,736 - mpk_lammps_ver4 - INFO - ✓ Created species ID mapping from model.AB_specie (backward compatible fallback) for 3 species: ['Sr', 'Ti', 'O']
+2026-03-03 11:49:39,743 - mpk_lammps_ver4 - INFO - ✓ revise_species_id_map: All user-specified species ['Sr', 'Ti', 'O'] are valid (found in model.charges). No changes to the ID map.
+2026-03-03 11:49:39,744 - mpk_lammps_ver4 - INFO - ✓ Revised species ID map: 3 valid species → 6 entries. {('Sr', 'core'): 1, ('Sr', 'shell'): 4, ('Ti', 'core'): 2, ('Ti', 'shell'): 5, ('O', 'core'): 3, ('O', 'shell'): 6}
+2026-03-03 11:49:39,749 - mpk_lammps_ver4 - WARNING - ⚠️  revise_species_id_map: The following user-specified species are NOT in the model potential file and will be REMOVED from the ID map: ['Hf']. They will NOT appear in the LAMMPS structure or setup file. Species present in the model: ['O', 'Sr', 'Ti'].
+2026-03-03 11:49:39,749 - mpk_lammps_ver4 - INFO - ✓ Revised species ID map: 2 valid species → 4 entries. {('Sr', 'core'): 1, ('Sr', 'shell'): 3, ('O', 'core'): 2, ('O', 'shell'): 4}
+2026-03-03 11:49:39,753 - mpk_lammps_ver4 - WARNING - ⚠️  revise_species_id_map: The following user-specified species are NOT in the model potential file and will be REMOVED from the ID map: ['Ba']. They will NOT appear in the LAMMPS structure or setup file. Species present in the model: ['O', 'Sr'].
+2026-03-03 11:49:39,753 - mpk_lammps_ver4 - INFO - ✓ Revised species ID map: 2 valid species → 4 entries. {('Sr', 'core'): 1, ('Sr', 'shell'): 3, ('O', 'core'): 2, ('O', 'shell'): 4}
+2026-03-03 11:49:39,756 - mpk_lammps_ver4 - WARNING - ⚠️  revise_species_id_map: The following user-specified species are NOT in the model potential file and will be REMOVED from the ID map: ['Sr']. They will NOT appear in the LAMMPS structure or setup file. Species present in the model: [].
+2026-03-03 11:49:39,756 - mpk_lammps_ver4 - INFO - ✓ Revised species ID map: 1 valid species → 2 entries. {('O', 'core'): 1, ('O', 'shell'): 2}
+2026-03-03 11:49:39,760 - mpk_lammps_ver4 - INFO - ✓ revise_species_id_map: All user-specified species ['Sr', 'Ti', 'O'] are valid (found in model.charges). No changes to the ID map.
+2026-03-03 11:49:39,760 - mpk_lammps_ver4 - INFO - ✓ Revised species ID map: 3 valid species → 6 entries. {('Sr', 'core'): 1, ('Sr', 'shell'): 4, ('Ti', 'core'): 2, ('Ti', 'shell'): 5, ('O', 'core'): 3, ('O', 'shell'): 6}
+2026-03-03 11:49:39,765 - mpk_lammps_ver4 - WARNING - ⚠️  Species ID '1' [core] has incomplete model parameters (charge or mass is None). This species was likely not found in the model potential file. It will be EXCLUDED from LAMMPS charge-set and bond sections. Check the warnings above for which user-specified species is missing.
+2026-03-03 11:49:39,765 - mpk_lammps_ver4 - WARNING - ⚠️  Species ID '2' [shell] has incomplete model parameters (charge or mass is None). This species was likely not found in the model potential file. It will be EXCLUDED from LAMMPS charge-set and bond sections. Check the warnings above for which user-specified species is missing.
+2026-03-03 11:49:39,772 - mpk_lammps_ver4 - WARNING - ⚠️  The following user-specified species are NOT found in the model potential data: ['Hf']. These species will have charge=None and mass=None — they will be EXCLUDED from LAMMPS charge-set and bond sections. Species available in the model: ['O', 'Sr', 'Ti']. If this is unintended, re-run with a species from the available list.
+2026-03-03 11:49:39,773 - mpk_lammps_ver4 - INFO - ✓ Created species ID mapping from user-specified for 3 species: ['Hf', 'Ti', 'O']
+2026-03-03 11:49:39,780 - mpk_lammps_ver4 - INFO - ✓ Created species ID mapping from user-specified for 3 species: ['Sr', 'Ti', 'O']
+2026-03-03 11:49:39,912 - mpk_lammps_ver4 - WARNING - ⚠️  Could not retrieve atomic weight for species 'XX' (mendeleev error: Element not found: XX). Charge and mass will remain None. It will be EXCLUDED from LAMMPS charge-set and bond sections.
+2026-03-03 11:49:39,912 - mpk_lammps_ver4 - INFO - ✓ Successfully mapped charges and masses to new model
+2026-03-03 11:49:39,926 - mpk_lammps_ver4 - WARNING - ⚠️  Species ID '99' [core] has incomplete model parameters (charge or mass is None). This species was likely not found in the model potential file. It will be EXCLUDED from LAMMPS charge-set and bond sections. Check the warnings above for which user-specified species is missing.
+2026-03-03 11:49:39,927 - mpk_lammps_ver4 - WARNING - ⚠️  Species ID '99' [shell] has incomplete model parameters (charge or mass is None). This species was likely not found in the model potential file. It will be EXCLUDED from LAMMPS charge-set and bond sections. Check the warnings above for which user-specified species is missing.
+2026-03-03 11:49:39,934 - mpk_lammps_ver4 - WARNING - ⚠️  Species 'Hf' is in species_id_map but has NO atoms in the cell. It may not be in the model data or has zero concentration. No atoms will be added for this species — its charge/mass entries will remain None.
+2026-03-03 11:49:39,936 - mpk_lammps_ver4 - INFO - ✓ Created mapped cell with 1 atoms (ABO order, core followed by its shell)
