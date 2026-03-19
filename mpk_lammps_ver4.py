@@ -6,8 +6,9 @@ This script processes shell models for LAMMPS structure and setup file generatio
 Mass ratio is set to 98% for core and 2% for shell.
 
 Author: Mukesh Khanore
-Date: 03-03-2026
-Note: missing species and random ordering for binary mixure for A and B position implemented
+Date: 19-03-2026
+Note: fix issue for pure case file mode Monica faced
+missing species and random ordering for binary mixure for A and B position implemented
 LAMMPS MD Logic: Mónica Elisabet Graf and Mauro António Pereira Gonçalves
 Version: 4.5 - Fixed shell preservation in cubic/random modes; proper FILE mode handling
 """
@@ -238,16 +239,18 @@ class Config:
             )
         
         # Validate species based on material type
-        if self.material_type == "pure":
-            if not self.species_a or not self.species_b:
-                raise ConfigurationError(
-                    "For pure material, both species_a and species_b must be specified"
-                )
-        elif self.material_type == "mix":
-            if not self.position or not self.mix_ratio:
-                raise ConfigurationError(
-                    "For mix material, position and mix_ratio must be specified"
-                )
+        # Skip species validation for "file" mode (reads from GS.gulp)
+        if self.symmetry != "file":
+            if self.material_type == "pure":
+                if not self.species_a or not self.species_b:
+                    raise ConfigurationError(
+                        "For pure material, both species_a and species_b must be specified"
+                    )
+            elif self.material_type == "mix":
+                if not self.position or not self.mix_ratio:
+                    raise ConfigurationError(
+                        "For mix material, position and mix_ratio must be specified"
+                    )
             if self.position not in ["A", "B"]:
                 raise ConfigurationError(
                     f"Position must be 'A' or 'B', got '{self.position}'"
