@@ -2241,7 +2241,6 @@ def main() -> None:
         logger.info("  ✓ lammps.in              (LAMMPS input script)")
         logger.info("  ✓ species_id_map.txt     (Species ID mapping)")
         logger.info("  ✓ lammps_processing.log  (Detailed processing log)")
-        logger.info("  ✓ supercell_structure.poscar  (Supercell structure)")
         logger.info("\n" + "=" * 70 + "\n")
         
     except ConfigurationError as e:

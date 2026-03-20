@@ -6,6 +6,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **Generated-file summary corrected (Option B)** — removed the stale
+  `supercell_structure.poscar` line from the runtime success message in
+  `main()`. The script now reports only files that are actually produced.
+
+### Documentation
+
+- **README prompt flow updated** — usage and configuration sections now match
+  the current interactive `get_user_config()` branching and validation rules.
+- **Python requirement consistency** — badge and text now both state Python
+  `3.11+`.
+- **TEST_README coverage mapping clarified** — explicitly distinguishes direct
+  tests for `revise_species_id_map` from indirect coverage of
+  `_sanitize_shell_model_for_writing`.
+
 ## [4.5] – 2026-03-03
 
 ### Fixed

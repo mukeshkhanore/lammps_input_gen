@@ -130,8 +130,10 @@ pytest -m integration
   - String cell creation: `shell_models['model']` keys stay as **integers**
   - Nomenclature normalization (`shel` → `shell`)
   - Handling of unknown particle types
-  - `_sanitize_shell_model_for_writing` is exercised indirectly through
-    the integration test and `process_shell_model` call chain
+  - Coverage mapping for Option B fallback path:
+    - `revise_species_id_map`: **direct unit coverage** (5 tests in `TestReviseSpeciesIdMap`)
+    - `_sanitize_shell_model_for_writing`: **indirect coverage** via
+      `process_shell_model` execution path and integration workflow tests
 
 - **`test_lammps_generation.py`** (16 tests): LAMMPS input generation
   - Header generation with model metadata

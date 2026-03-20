@@ -1,6 +1,6 @@
 # LAMMPS Shell Model Processing Script
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A robust Python script for processing shell models and generating LAMMPS structure and setup files from `.pickle` and `GS.gulp` files.
@@ -109,25 +109,65 @@ python mpk_lammps_ver4.py
 The script will prompt you for:
 
 - Model file path (`.pickle` file)
-- Supercell dimensions (e.g., `8 8 8`)
 - Symmetry type (`cubic`, `random`, or `file`)
-- Output filename (default: `structure`)
+- Material mode (`pure` or `mix`) for `cubic`/`random` symmetry
+- Species input (`species_a`, `species_b`, optional mixed-site pair)
+- Mix settings (`position`, `mix_ratio`) when `material_type=mix`
+- Supercell dimensions (e.g., `8 8 8`)
 - Temperature array (e.g., `10 50 100 200`)
 - Thermostat damping time (default: `0.1`)
 - Barostat damping time (default: `2.0`)
+- Runtime control parameters: `THERMO_FREQ`, `TIMESTEP`,
+  `EQUILIBRATION_TEMP_STEPS`, `EQUILIBRATION_FINAL_STEPS`,
+  `PRODUCTION_STEPS`, and trajectory prefix
+
+### Interactive Configuration Flow
+
+The CLI question flow is conditional and follows `get_user_config()`:
+
+1. Model pickle path
+2. Symmetry (`file` / `cubic` / `random`)
+3. If symmetry is `file`: skip species and material prompts
+4. If symmetry is `cubic` or `random`:
+   - Ask material type (`pure` / `mix`)
+   - If `mix`: ask mixed-site position (`A`/`B`), two species, and `mix_ratio`
+   - If `pure`: ask single `species_a` and single `species_b`
+5. Ask simulation controls for all modes:
+   - supercell dimensions
+   - temperature array
+   - thermostat/barostat damping
+   - `THERMO_FREQ`, `TIMESTEP`
+   - equilibration and production steps
+   - trajectory filename prefix
+
+Validation rules enforced during prompts include:
+
+- `mix_ratio` must be in the range `[0.0, 1.0]`
+- dimensions and all step/frequency values must be positive
+- temperatures must be non-negative
+- species entries must be non-empty and syntactically valid for selected mode
 
 ### Example Session
 
 ```
 ⚙️  CONFIGURATION SUMMARY
 ======================================================================
+   Symmetry                   : cubic
+   Material type              : mix
+   Position                   : A
+   Species (A mix)            : Ba/Ca
+   Species (B pure)           : Ti
   Model file       : ./potential.pickle
-  Supercell dims   : [2, 2, 2]
-  Symmetry         : cubic
-  Output filename  : structure
-  Temperatures [K] : [10.0, 50.0, 100.0, 200.0]
-  T-stat damping   : 0.1
-  P-stat damping   : 2.0
+   Supercell dims             : [2, 2, 2]
+   Temperatures [K]           : [10.0, 50.0, 100.0, 200.0]
+   T-stat damping             : 0.1 fs
+   P-stat damping             : 2.0 fs
+   THERMO_FREQ                : 500
+   TIMESTEP [fs]              : 0.0002
+   EQUILIBRATION_TEMP_STEPS   : 20000
+   EQUILIBRATION_FINAL_STEPS  : 30000
+   PRODUCTION_STEPS           : 50000
+   Trajectory name            : trajectory
 ======================================================================
 
 ✓ Renamed 'structure.LAMMPSStructure' to 'rstrt.dat'
